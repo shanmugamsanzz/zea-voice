@@ -7,6 +7,7 @@ import { resolveInteractionConfiguration } from '../interaction/interaction-conf
 import { resolveLiveMemoryConfiguration } from '../interaction/live-memory-config.js';
 import { resolveInterruptionConfiguration } from '../interruption/interruption-config.js';
 import { normalizeTtsUsageLimitSettings } from '../tts-usage-limit-config.js';
+import { isRuntimeConnectionLiveEligible } from '../../providers/runtime-connection-types.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
 
@@ -186,14 +187,17 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
           sm.id stt_model_id, sm.model_key stt_model_key, sm.display_name stt_model_name,
           sm.settings stt_model_settings, sm.capabilities stt_model_capabilities,
           sp.id stt_provider_id, sp.name stt_provider_name, sp.slug stt_provider_slug, sp.base_url stt_base_url,
+          sp.runtime_connection_type stt_runtime_connection_type,
           ${parameterSubquery('sp')} stt_parameters,
           lm.id llm_model_id, lm.model_key llm_model_key, lm.display_name llm_model_name,
           lm.settings llm_model_settings, lm.capabilities llm_model_capabilities,
           lp.id llm_provider_id, lp.name llm_provider_name, lp.slug llm_provider_slug, lp.base_url llm_base_url,
+          lp.runtime_connection_type llm_runtime_connection_type,
           ${parameterSubquery('lp')} llm_parameters,
           tm.id tts_model_id, tm.model_key tts_model_key, tm.display_name tts_model_name,
           tm.settings tts_model_settings, tm.capabilities tts_model_capabilities,
           tp.id tts_provider_id, tp.name tts_provider_name, tp.slug tts_provider_slug, tp.base_url tts_base_url,
+          tp.runtime_connection_type tts_runtime_connection_type,
           ${parameterSubquery('tp')} tts_parameters,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'id', t.id, 'name', t.name, 'type', t.type, 'description', t.description,
@@ -258,6 +262,12 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
       throw new AppError(409, 'Agent runtime profile is no longer available', 'VOICE_RUNTIME_PROFILE_UNAVAILABLE');
     }
     const row = result.rows[0];
+    for (const type of ['stt', 'llm', 'tts']) {
+      if (!isRuntimeConnectionLiveEligible(type, row[`${type}_runtime_connection_type`], 'connected')) {
+        throw new AppError(409, `Agent ${type.toUpperCase()} model is configuration only and cannot be used in a live call`,
+          'VOICE_RUNTIME_MODEL_CONFIGURATION_ONLY', { type, runtimeConnectionType: row[`${type}_runtime_connection_type`] });
+      }
+    }
     const settings = row.settings ?? {};
     // Also protects agents activated before save-time readiness checks existed.
     // Run before decrypting credentials or constructing provider/tool adapters.

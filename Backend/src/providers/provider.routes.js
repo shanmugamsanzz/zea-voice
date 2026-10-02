@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { authenticateRequest, requireRoles } from '../auth/auth.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import {
-  createModelSchema, createProviderSchema, listProvidersSchema, modelIdSchema,
-  modelStatusSchema, parseProviderInput, providerIdSchema, providerStatusSchema,
-  updateModelSchema, updateProviderSchema,
+  createModelPricesSchema, createModelSchema, createProviderSchema, listProvidersSchema, modelIdSchema,
+  modelPriceHistorySchema, modelPriceIdSchema, modelPriceStatusSchema, modelStatusSchema, parseProviderInput,
+  providerIdSchema, providerStatusSchema, updateModelPriceSchema, updateModelSchema, updateProviderSchema,
 } from './provider.schemas.js';
 import {
-  createProvider, createProviderModel, deleteProvider, getProviderCatalog, listProviderModels, listProviders,
-  updateProviderModel, updateModelStatus, updateProvider, updateProviderStatus,
+  createProvider, createProviderModel, createProviderModelPrices, deleteProvider, getProviderCatalog, listProviderModels, listProviders,
+  listProviderModelPriceHistory, listProviderModelPrices, listRuntimeConnectionTypes, updateProviderModelPrice,
+  updateProviderModel, updateModelStatus, updateProvider, updateProviderModelPriceStatus, updateProviderStatus,
 } from './provider.service.js';
 
 function valid(schema, value) {
@@ -20,6 +21,7 @@ function valid(schema, value) {
 export const providerRouter = Router();
 providerRouter.use(authenticateRequest, requireRoles('SUPER_ADMIN'));
 providerRouter.get('/', async (req, res) => res.json({ success: true, data: await listProviders(req.auth.userId, valid(listProvidersSchema, req.query)) }));
+providerRouter.get('/runtime-connection-types', (req, res) => res.json({ success: true, data: listRuntimeConnectionTypes() }));
 providerRouter.post('/', async (req, res) => res.status(201).json({ success: true, data: await createProvider(req.auth.userId, valid(createProviderSchema, req.body)) }));
 providerRouter.patch('/:providerId', async (req, res) => {
   const { providerId } = valid(providerIdSchema, req.params);
@@ -50,6 +52,28 @@ providerRouter.patch('/models/:modelId/status', async (req, res) => {
   const { modelId } = valid(modelIdSchema, req.params);
   const { status } = valid(modelStatusSchema, req.body);
   res.json({ success: true, data: await updateModelStatus(req.auth.userId, modelId, status) });
+});
+providerRouter.post('/models/:modelId/prices', async (req, res) => {
+  const { modelId } = valid(modelIdSchema, req.params);
+  res.status(201).json({ success: true, data: await createProviderModelPrices(req.auth.userId, modelId, valid(createModelPricesSchema, req.body)) });
+});
+providerRouter.get('/models/:modelId/prices', async (req, res) => {
+  const { modelId } = valid(modelIdSchema, req.params);
+  res.json({ success: true, data: await listProviderModelPrices(req.auth.userId, modelId) });
+});
+providerRouter.get('/models/:modelId/prices/history', async (req, res) => {
+  const { modelId } = valid(modelIdSchema, req.params);
+  const { parameterName } = valid(modelPriceHistorySchema, req.query);
+  res.json({ success: true, data: await listProviderModelPriceHistory(req.auth.userId, modelId, parameterName) });
+});
+providerRouter.patch('/model-prices/:priceId', async (req, res) => {
+  const { priceId } = valid(modelPriceIdSchema, req.params);
+  res.json({ success: true, data: await updateProviderModelPrice(req.auth.userId, priceId, valid(updateModelPriceSchema, req.body)) });
+});
+providerRouter.patch('/model-prices/:priceId/status', async (req, res) => {
+  const { priceId } = valid(modelPriceIdSchema, req.params);
+  const { status } = valid(modelPriceStatusSchema, req.body);
+  res.json({ success: true, data: await updateProviderModelPriceStatus(req.auth.userId, priceId, status) });
 });
 
 export const catalogRouter = Router();

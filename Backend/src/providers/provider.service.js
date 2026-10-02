@@ -2,6 +2,15 @@ import crypto from 'node:crypto';
 import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { decryptCredential } from '../security/credential-crypto.js';
+import {
+  defaultRuntimeConnectionType,
+  bindRuntimeConnectionToCapabilities,
+  isRuntimeConnectionTypeForProvider,
+  providerRuntimeConnectionTypes,
+  runtimeConnectionMetadata,
+  runtimeConnectionStatus,
+  isRuntimeConnectionLiveEligible,
+} from './runtime-connection-types.js';
 
 function slugify(value) {
   return value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
@@ -17,18 +26,38 @@ function mapProvider(row) {
   }));
   return {
     id: row.id, name: row.name, slug: row.slug, type: row.type, status: row.status,
+    runtimeConnectionType: row.runtime_connection_type,
+    runtimeConnection: runtimeConnectionMetadata(row.type, row.runtime_connection_type),
     baseUrl: row.base_url, latencyMs: row.latency_ms, usageCount: Number(row.usage_count),
     parameterKeys: parameters, parameters, modelCount: Number(row.model_count ?? 0),
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
 
+function resolvedRuntimeConnectionType(type, requestedType) {
+  const runtimeConnectionType = requestedType ?? defaultRuntimeConnectionType(type);
+  if (!runtimeConnectionType || !isRuntimeConnectionTypeForProvider(type, runtimeConnectionType)) {
+    throw new AppError(
+      400,
+      'Runtime Connection Type is not supported for this Provider Type',
+      'INVALID_PROVIDER_RUNTIME_CONNECTION_TYPE',
+      { type, runtimeConnectionType, supported: providerRuntimeConnectionTypes[type] ?? [] },
+    );
+  }
+  return runtimeConnectionType;
+}
+
 function mapModel(row) {
   const settings = { ...(row.provider_settings ?? {}), ...(row.settings ?? {}) };
+  const runtimeConnection = runtimeConnectionMetadata(row.provider_type, row.runtime_connection_type);
   return {
     id: row.id, providerId: row.provider_id, providerName: row.provider_name,
     providerType: row.provider_type, modelKey: row.model_key, displayName: row.display_name,
     status: row.status, capabilities: row.capabilities, settings,
+    runtimeConnectionType: row.runtime_connection_type ?? null,
+    runtimeConnection,
+    runtimeStatus: runtimeConnectionStatus(row.provider_type, row.runtime_connection_type, row.provider_status),
+    providerConnectionStatus: row.provider_status ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -49,15 +78,56 @@ async function providerRow(client, id) {
   return result.rows[0];
 }
 
+const providerModelSelect = `
+  SELECT m.*, p.name AS provider_name, p.type AS provider_type,
+    p.runtime_connection_type, p.status AS provider_status
+  FROM provider_models m JOIN ai_providers p ON p.id = m.provider_id
+  WHERE m.deleted_at IS NULL`;
+
+async function providerModelRow(client, id) {
+  const result = await client.query(`${providerModelSelect} AND m.id = $1`, [id]);
+  if (!result.rowCount) throw new AppError(404, 'Provider model was not found', 'PROVIDER_MODEL_NOT_FOUND');
+  return result.rows[0];
+}
+
+function runtimeBoundCapabilities(provider, capabilities) {
+  return bindRuntimeConnectionToCapabilities(
+    provider.type,
+    provider.runtimeConnectionType,
+    capabilities ?? {},
+  );
+}
+
+function normalizedModelSettings(input, current = {}) {
+  const settings = { ...(current ?? {}), ...(input.settings ?? {}) };
+  if (input.voiceId !== undefined) settings.voiceId = input.voiceId;
+  if (input.language !== undefined) settings.language = input.language;
+  return settings;
+}
+
+async function synchronizeProviderModelRuntimeCapabilities(client, provider) {
+  const models = await client.query(
+    `SELECT id, capabilities FROM provider_models WHERE provider_id = $1 AND deleted_at IS NULL`,
+    [provider.id],
+  );
+  for (const model of models.rows) {
+    await client.query(
+      `UPDATE provider_models SET capabilities = $2::jsonb WHERE id = $1`,
+      [model.id, JSON.stringify(runtimeBoundCapabilities(provider, model.capabilities))],
+    );
+  }
+}
+
 export async function createProvider(actorUserId, input) {
   const keys = input.parameters.map((item) => item.key.toLowerCase());
   if (new Set(keys).size !== keys.length) throw new AppError(400, 'Provider parameter keys must be unique', 'DUPLICATE_PARAMETER_KEY');
   try {
     return await withPlatformAdminContext(actorUserId, async (client) => {
+      const runtimeConnectionType = resolvedRuntimeConnectionType(input.type, input.runtimeConnectionType);
       const provider = (await client.query(
-        `INSERT INTO ai_providers (name, slug, type, status, base_url, latency_ms, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [input.name, slugify(input.name), input.type, input.status, input.baseUrl, input.latencyMs, actorUserId],
+        `INSERT INTO ai_providers (name, slug, type, runtime_connection_type, status, base_url, latency_ms, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [input.name, slugify(input.name), input.type, runtimeConnectionType, input.status, input.baseUrl, input.latencyMs, actorUserId],
       )).rows[0];
       for (const parameter of input.parameters) {
         await client.query(
@@ -70,7 +140,7 @@ export async function createProvider(actorUserId, input) {
       await client.query(
         `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, after_data)
          VALUES ($1, 'user', 'AI_PROVIDER_CREATED', 'ai_provider', $2, $3::jsonb)`,
-        [actorUserId, provider.id, JSON.stringify({ name: input.name, type: input.type, parameterKeys: input.parameters.map((p) => p.key) })],
+        [actorUserId, provider.id, JSON.stringify({ name: input.name, type: input.type, runtimeConnectionType, parameterKeys: input.parameters.map((p) => p.key) })],
       );
       return mapProvider(await providerRow(client, provider.id));
     });
@@ -113,7 +183,13 @@ export function updateProviderStatus(actorUserId, providerId, status) {
 export function updateProvider(actorUserId, providerId, input) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const before = mapProvider(await providerRow(client, providerId));
-    const fields = { name: 'name', status: 'status', baseUrl: 'base_url', latencyMs: 'latency_ms' };
+    if (input.runtimeConnectionType !== undefined) {
+      input.runtimeConnectionType = resolvedRuntimeConnectionType(before.type, input.runtimeConnectionType);
+    }
+    const fields = {
+      name: 'name', status: 'status', baseUrl: 'base_url', latencyMs: 'latency_ms',
+      runtimeConnectionType: 'runtime_connection_type',
+    };
     const entries = Object.entries(fields).filter(([key]) => key in input);
     const values = entries.map(([key]) => input[key]);
     const sets = entries.map(([, column], index) => `${column} = $${index + 2}`);
@@ -127,6 +203,13 @@ export function updateProvider(actorUserId, providerId, input) {
         if (error.code === '23505') throw new AppError(409, 'Provider name already exists', 'PROVIDER_EXISTS');
         throw error;
       }
+    }
+    if (input.runtimeConnectionType !== undefined) {
+      await synchronizeProviderModelRuntimeCapabilities(client, {
+        id: before.id,
+        type: before.type,
+        runtimeConnectionType: input.runtimeConnectionType,
+      });
     }
     if (input.parameters !== undefined) {
       const normalizedKeys = input.parameters.map((parameter) => parameter.key.toLowerCase());
@@ -179,6 +262,10 @@ export function updateProvider(actorUserId, providerId, input) {
   });
 }
 
+export function listRuntimeConnectionTypes() {
+  return providerRuntimeConnectionTypes;
+}
+
 export function deleteProvider(actorUserId, providerId) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const before = mapProvider(await providerRow(client, providerId));
@@ -220,22 +307,26 @@ export function deleteProvider(actorUserId, providerId) {
 
 export function createProviderModel(actorUserId, providerId, input) {
   return withPlatformAdminContext(actorUserId, async (client) => {
-    await providerRow(client, providerId);
+    const provider = mapProvider(await providerRow(client, providerId));
+    const modelStatus = isRuntimeConnectionLiveEligible(
+      provider.type, provider.runtimeConnectionType, provider.status,
+    ) ? input.status : 'inactive';
     try {
       const result = await client.query(
         `INSERT INTO provider_models
           (provider_id, model_key, display_name, status, capabilities, settings, created_by)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
-         RETURNING *, NULL::text AS provider_name, NULL::ai_provider_type AS provider_type`,
-        [providerId, input.modelKey, input.displayName, input.status,
-          JSON.stringify(input.capabilities), JSON.stringify(input.settings), actorUserId],
+         RETURNING id`,
+        [providerId, input.modelKey, input.displayName, modelStatus,
+          JSON.stringify(runtimeBoundCapabilities(provider, input.capabilities)),
+          JSON.stringify(normalizedModelSettings(input)), actorUserId],
       );
       await client.query(
         `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, after_data)
          VALUES ($1, 'user', 'PROVIDER_MODEL_CREATED', 'provider_model', $2, $3::jsonb)`,
         [actorUserId, result.rows[0].id, JSON.stringify({ providerId, modelKey: input.modelKey })],
       );
-      return mapModel(result.rows[0]);
+      return mapModel(await providerModelRow(client, result.rows[0].id));
     } catch (error) {
       if (error.code === '23505') throw new AppError(409, 'This model already exists for the provider', 'PROVIDER_MODEL_EXISTS');
       throw error;
@@ -247,9 +338,7 @@ export function listProviderModels(actorUserId, providerId) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     await providerRow(client, providerId);
     const result = await client.query(
-      `SELECT m.*, p.name AS provider_name, p.type AS provider_type
-       FROM provider_models m JOIN ai_providers p ON p.id = m.provider_id
-       WHERE m.provider_id = $1 AND m.deleted_at IS NULL
+      `${providerModelSelect} AND m.provider_id = $1
        ORDER BY m.created_at DESC`,
       [providerId],
     );
@@ -257,54 +346,227 @@ export function listProviderModels(actorUserId, providerId) {
   });
 }
 
+function mapModelPrice(row) {
+  return {
+    id: row.id, providerId: row.provider_id, modelId: row.model_id,
+    parameterName: row.parameter_name, currency: row.currency, unitName: row.unit_name,
+    unitQuantity: Number(row.unit_quantity), price: Number(row.price),
+    effectiveDate: row.effective_date, status: row.status, notes: row.notes,
+    createdBy: row.created_by, updatedBy: row.updated_by,
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+async function providerModelPriceRow(client, id) {
+  const result = await client.query(
+    `SELECT price.*
+       FROM provider_model_prices price
+       JOIN provider_models model ON model.id = price.model_id
+      WHERE price.id = $1 AND model.deleted_at IS NULL`,
+    [id],
+  );
+  if (!result.rowCount) throw new AppError(404, 'Provider model price was not found', 'PROVIDER_MODEL_PRICE_NOT_FOUND');
+  return result.rows[0];
+}
+
+export function createProviderModelPrices(actorUserId, modelId, input, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withPlatformAdminContext;
+  return contextRunner(actorUserId, async (client) => {
+    try {
+      const model = await providerModelRow(client, modelId);
+      if (model.provider_id !== input.providerId) {
+        throw new AppError(400, 'The selected model does not belong to the selected provider', 'MODEL_PROVIDER_MISMATCH');
+      }
+      const created = [];
+      for (const parameter of input.parameters) {
+        const result = await client.query(
+          `INSERT INTO provider_model_prices
+            (provider_id, model_id, parameter_name, currency, unit_name, unit_quantity,
+             price, effective_date, status, notes, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::date, CURRENT_DATE), $9, $10, $11, $11)
+           RETURNING *`,
+          [model.provider_id, modelId, parameter.parameterName, parameter.currency, parameter.unitName,
+            parameter.unitQuantity, parameter.price, parameter.effectiveDate ?? null, parameter.status,
+            parameter.notes ?? null, actorUserId],
+        );
+        created.push(mapModelPrice(result.rows[0]));
+      }
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, after_data)
+         VALUES ($1, 'user', 'PROVIDER_MODEL_PRICES_CREATED', 'provider_model', $2, $3::jsonb)`,
+        [actorUserId, modelId, JSON.stringify({
+          providerId: model.provider_id,
+          parameters: created.map((price) => ({ parameterName: price.parameterName, unitName: price.unitName, unitQuantity: price.unitQuantity })),
+        })],
+      );
+      return created;
+    } catch (error) {
+      if (error.code === '23505') {
+        throw new AppError(409, 'An active price already exists for this model, parameter, and effective date', 'ACTIVE_PRICE_PERIOD_EXISTS');
+      }
+      throw error;
+    }
+  });
+}
+
+export function listProviderModelPrices(actorUserId, modelId) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    await providerModelRow(client, modelId);
+    const result = await client.query(
+      `SELECT * FROM provider_model_prices
+        WHERE model_id = $1
+        ORDER BY parameter_name ASC, effective_date DESC, updated_at DESC`,
+      [modelId],
+    );
+    return result.rows.map(mapModelPrice);
+  });
+}
+
+export function listProviderModelPriceHistory(actorUserId, modelId, parameterName) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    await providerModelRow(client, modelId);
+    const result = await client.query(
+      `SELECT * FROM provider_model_prices
+        WHERE model_id = $1 AND lower(parameter_name) = lower($2)
+        ORDER BY effective_date DESC, updated_at DESC`,
+      [modelId, parameterName],
+    );
+    return result.rows.map(mapModelPrice);
+  });
+}
+
+export function updateProviderModelPrice(actorUserId, priceId, input) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    try {
+      const current = await providerModelPriceRow(client, priceId);
+      const next = {
+        parameterName: input.parameterName ?? current.parameter_name,
+        currency: input.currency ?? current.currency,
+        unitName: input.unitName ?? current.unit_name,
+        unitQuantity: input.unitQuantity ?? current.unit_quantity,
+        price: input.price ?? current.price,
+        effectiveDate: input.effectiveDate ?? current.effective_date,
+        status: input.status ?? current.status,
+        notes: input.notes !== undefined ? input.notes : current.notes,
+      };
+      if (next.status === 'active') {
+        await client.query(
+          `UPDATE provider_model_prices
+            SET status = 'inactive', updated_by = $4
+          WHERE model_id = $1 AND lower(parameter_name) = lower($2)
+            AND effective_date = $3::date AND status = 'active'`,
+          [current.model_id, next.parameterName, next.effectiveDate, actorUserId],
+        );
+      }
+      const result = await client.query(
+        `INSERT INTO provider_model_prices
+        (provider_id, model_id, parameter_name, currency, unit_name, unit_quantity,
+         price, effective_date, status, notes, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $11)
+       RETURNING *`,
+        [current.provider_id, current.model_id, next.parameterName, next.currency, next.unitName,
+          next.unitQuantity, next.price, next.effectiveDate, next.status, next.notes, actorUserId],
+      );
+      const updated = mapModelPrice(result.rows[0]);
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, before_data, after_data)
+       VALUES ($1, 'user', 'PROVIDER_MODEL_PRICE_VERSION_CREATED', 'provider_model_price', $2, $3::jsonb, $4::jsonb)`,
+        [actorUserId, updated.id, JSON.stringify(mapModelPrice(current)), JSON.stringify(updated)],
+      );
+      return updated;
+    } catch (error) {
+      if (error.code === '23505') {
+        throw new AppError(409, 'An active price already exists for this model, parameter, and effective date', 'ACTIVE_PRICE_PERIOD_EXISTS');
+      }
+      throw error;
+    }
+  });
+}
+
+export function updateProviderModelPriceStatus(actorUserId, priceId, status) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    try {
+      const current = await providerModelPriceRow(client, priceId);
+      const result = await client.query(
+        `UPDATE provider_model_prices SET status = $2, updated_by = $3 WHERE id = $1 RETURNING *`,
+        [priceId, status, actorUserId],
+      );
+      const updated = mapModelPrice(result.rows[0]);
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, before_data, after_data)
+       VALUES ($1, 'user', 'PROVIDER_MODEL_PRICE_STATUS_CHANGED', 'provider_model_price', $2, $3::jsonb, $4::jsonb)`,
+        [actorUserId, priceId, JSON.stringify({ status: current.status }), JSON.stringify({ status: updated.status })],
+      );
+      return updated;
+    } catch (error) {
+      if (error.code === '23505') {
+        throw new AppError(409, 'Deactivate the current active price for this effective period before activating this history row', 'ACTIVE_PRICE_PERIOD_EXISTS');
+      }
+      throw error;
+    }
+  });
+}
+
 export function updateModelStatus(actorUserId, modelId, status) {
   return withPlatformAdminContext(actorUserId, async (client) => {
+    const current = await providerModelRow(client, modelId);
+    if (status === 'active' && !isRuntimeConnectionLiveEligible(
+      current.provider_type, current.runtime_connection_type, current.provider_status,
+    )) {
+      throw new AppError(409, 'Configuration-only models cannot be activated for live agents', 'MODEL_CONFIGURATION_ONLY');
+    }
     const result = await client.query(
       `UPDATE provider_models SET status = $2
-       WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
+       WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
       [modelId, status],
     );
     if (!result.rowCount) throw new AppError(404, 'Provider model was not found', 'PROVIDER_MODEL_NOT_FOUND');
-    return mapModel(result.rows[0]);
+    return mapModel(await providerModelRow(client, result.rows[0].id));
   });
 }
 
 export function updateProviderModel(actorUserId, modelId, input) {
   return withPlatformAdminContext(actorUserId, async (client) => {
-    const before = await client.query(
-      `SELECT * FROM provider_models WHERE id = $1 AND deleted_at IS NULL`,
-      [modelId],
-    );
-    if (!before.rowCount) throw new AppError(404, 'Provider model was not found', 'PROVIDER_MODEL_NOT_FOUND');
-    const current = before.rows[0];
+    const current = await providerModelRow(client, modelId);
+    const provider = {
+      id: current.provider_id,
+      type: current.provider_type,
+      runtimeConnectionType: current.runtime_connection_type,
+    };
+    if (input.status === 'active' && !isRuntimeConnectionLiveEligible(
+      provider.type, provider.runtimeConnectionType, current.provider_status,
+    )) {
+      throw new AppError(409, 'Configuration-only models cannot be activated for live agents', 'MODEL_CONFIGURATION_ONLY');
+    }
     try {
       const result = await client.query(
         `UPDATE provider_models
             SET model_key = $2, display_name = $3, status = $4,
                 capabilities = $5::jsonb, settings = $6::jsonb
           WHERE id = $1 AND deleted_at IS NULL
-          RETURNING *, NULL::text AS provider_name, NULL::ai_provider_type AS provider_type`,
+          RETURNING id`,
         [
           modelId,
           input.modelKey ?? current.model_key,
           input.displayName ?? current.display_name,
           input.status ?? current.status,
-          JSON.stringify(input.capabilities ?? current.capabilities ?? {}),
-          JSON.stringify(input.settings ?? current.settings ?? {}),
+          JSON.stringify(runtimeBoundCapabilities(provider, input.capabilities ?? current.capabilities ?? {})),
+          JSON.stringify(normalizedModelSettings(input, current.settings)),
         ],
       );
+      const after = mapModel(await providerModelRow(client, result.rows[0].id));
       await client.query(
         `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, before_data, after_data)
          VALUES ($1, 'user', 'PROVIDER_MODEL_UPDATED', 'provider_model', $2, $3::jsonb, $4::jsonb)`,
         [actorUserId, modelId,
           JSON.stringify({ modelKey: current.model_key, displayName: current.display_name, status: current.status }),
           JSON.stringify({
-            modelKey: result.rows[0].model_key,
-            displayName: result.rows[0].display_name,
-            status: result.rows[0].status,
+            modelKey: after.modelKey,
+            displayName: after.displayName,
+            status: after.status,
           })],
       );
-      return mapModel(result.rows[0]);
+      return after;
     } catch (error) {
       if (error.code === '23505') throw new AppError(409, 'This model already exists for the provider', 'PROVIDER_MODEL_EXISTS');
       throw error;
@@ -316,6 +578,7 @@ export function getProviderCatalog(auth, type) {
   return withPlatformAdminContext(auth.userId, async (client) => {
     const result = await client.query(
       `SELECT m.*, p.name AS provider_name, p.type AS provider_type,
+          p.runtime_connection_type, p.status AS provider_status,
           COALESCE((SELECT jsonb_object_agg(x.key, x.plain_value)
             FROM ai_provider_parameters x
             WHERE x.provider_id=p.id AND x.plain_value IS NOT NULL
@@ -328,6 +591,6 @@ export function getProviderCatalog(auth, type) {
        ORDER BY p.name, m.display_name`,
       [type ?? null],
     );
-    return result.rows.map(mapModel);
+    return result.rows.map(mapModel).filter((model) => model.runtimeStatus === 'runtime_supported');
   });
 }

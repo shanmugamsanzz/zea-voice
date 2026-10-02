@@ -1,7 +1,7 @@
-const providerKinds = new Set(['telephony', 'stt', 'llm', 'tts']);
+const providerKinds = new Set(['telephony', 'stt', 'llm', 'tts', 'audio_to_audio']);
 const numericFields = [
-  'requests', 'inputTokens', 'outputTokens', 'totalTokens', 'audioInputMs',
-  'audioOutputMs', 'characters', 'durationMs', 'cost',
+  'requests', 'inputTokens', 'outputTokens', 'cachedInputTokens', 'audioInputTokens',
+  'audioOutputTokens', 'totalTokens', 'audioInputMs', 'audioOutputMs', 'characters', 'durationMs', 'cost',
 ];
 
 function nonnegative(value, field) {
@@ -42,6 +42,9 @@ export class ProviderUsageTracker {
       requests: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cachedInputTokens: 0,
+      audioInputTokens: 0,
+      audioOutputTokens: 0,
       totalTokens: 0,
       audioInputMs: 0,
       audioOutputMs: 0,
@@ -55,6 +58,9 @@ export class ProviderUsageTracker {
       requests: usage.requests ?? usage.requestCount ?? 1,
       inputTokens: usage.inputTokens ?? usage.promptTokens ?? usage.prompt_tokens,
       outputTokens: usage.outputTokens ?? usage.completionTokens ?? usage.completion_tokens,
+      cachedInputTokens: usage.cachedInputTokens ?? usage.cached_input_tokens,
+      audioInputTokens: usage.audioInputTokens ?? usage.audio_input_tokens,
+      audioOutputTokens: usage.audioOutputTokens ?? usage.audio_output_tokens,
       totalTokens: usage.totalTokens ?? usage.total_tokens,
       audioInputMs: usage.audioInputMs ?? usage.inputAudioMs,
       audioOutputMs: usage.audioOutputMs ?? usage.outputAudioMs,
@@ -67,7 +73,11 @@ export class ProviderUsageTracker {
     if (usage.currency && usage.currency !== current.currency) {
       throw new TypeError('Provider usage currencies cannot be mixed in one report');
     }
-    current.events.push(structuredClone(usage));
+    current.events.push({
+      occurredAt: usage.occurredAt ?? new Date().toISOString(),
+      ...normalized,
+      raw: structuredClone(usage),
+    });
     this.#records.set(recordKey, current);
     return this.report();
   }

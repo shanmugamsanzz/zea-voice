@@ -25,7 +25,6 @@ function mapCompany(row) {
     businessPhone: row.business_phone,
     website: row.website,
     billingTier: row.billing_tier,
-    perMinutePrice: Number(row.per_minute_price),
     addressLine1: row.address_line1,
     addressLine2: row.address_line2,
     state: row.state,
@@ -57,7 +56,7 @@ const companySelect = `
   SELECT count(*) OVER()::int AS full_count,
          t.id AS tenant_id, o.id AS organization_id, w.id AS workspace_id,
          t.name AS business_name, o.name AS organization_name, o.legal_name, o.first_name, o.last_name,
-         o.primary_email, o.business_phone, o.website, o.billing_tier, o.per_minute_price,
+         o.primary_email, o.business_phone, o.website, o.billing_tier,
          o.address_line1, o.address_line2, o.state, o.country, o.postal_code,
          t.timezone, t.status, w.name AS workspace_name,
          s.locale, s.currency,
@@ -101,22 +100,15 @@ export async function createCompany(actorUserId, input, metadata = {}) {
       const organization = (await client.query(
         `INSERT INTO organizations
           (tenant_id, name, legal_name, first_name, last_name, primary_email,
-           business_phone, website, billing_tier, per_minute_price, address_line1, address_line2,
+           business_phone, website, billing_tier, address_line1, address_line2,
            state, country, postal_code, timezone, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING id`,
         [tenant.id, input.organizationName ?? input.businessName, input.legalName, input.firstName, input.lastName,
-          input.email, input.businessPhone, input.website, input.billingTier, input.perMinutePrice,
+          input.email, input.businessPhone, input.website, input.billingTier,
           input.addressLine1, input.addressLine2, input.state, input.country,
           input.postalCode, input.timezone, input.status, actorUserId],
       )).rows[0];
-
-      await client.query(
-        `INSERT INTO company_credit_price_history
-          (tenant_id, price_per_minute, changed_by)
-         VALUES ($1, $2, $3)`,
-        [tenant.id, input.perMinutePrice, actorUserId],
-      );
 
       const workspace = (await client.query(
         `INSERT INTO workspaces
@@ -171,29 +163,6 @@ export function getCompany(actorUserId, tenantId) {
   return withPlatformAdminContext(actorUserId, async (client) => mapCompany(await getCompanyRow(client, tenantId)));
 }
 
-export function getCompanyPricingHistory(actorUserId, tenantId) {
-  return withPlatformAdminContext(actorUserId, async (client) => {
-    await getCompanyRow(client, tenantId);
-    const result = await client.query(
-      `SELECT h.id, h.price_per_minute, h.effective_from, h.effective_to,
-              h.changed_by, concat_ws(' ', u.first_name, u.last_name) AS changed_by_name
-       FROM company_credit_price_history h
-       LEFT JOIN users u ON u.id = h.changed_by
-       WHERE h.tenant_id = $1
-       ORDER BY h.effective_from DESC`,
-      [tenantId],
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      perMinutePrice: Number(row.price_per_minute),
-      effectiveFrom: row.effective_from,
-      effectiveTo: row.effective_to,
-      changedBy: row.changed_by,
-      changedByName: row.changed_by_name || null,
-    }));
-  });
-}
-
 export function listCompanies(actorUserId, filters) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const values = [filters.search ?? null, filters.status ?? null, filters.billingTier ?? null];
@@ -240,7 +209,7 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
     const organizationFields = {
       organizationName: 'name', legalName: 'legal_name', firstName: 'first_name', lastName: 'last_name',
       email: 'primary_email', businessPhone: 'business_phone', website: 'website',
-      billingTier: 'billing_tier', perMinutePrice: 'per_minute_price',
+      billingTier: 'billing_tier',
       addressLine1: 'address_line1', addressLine2: 'address_line2',
       state: 'state', country: 'country', postalCode: 'postal_code', timezone: 'timezone',
     };
@@ -249,20 +218,6 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
       const values = organizationEntries.map(([key]) => input[key]);
       const sets = organizationEntries.map(([, column], index) => `${column} = $${index + 2}`);
       await client.query(`UPDATE organizations SET ${sets.join(', ')} WHERE tenant_id = $1`, [tenantId, ...values]);
-    }
-    if (input.perMinutePrice !== undefined && input.perMinutePrice !== before.perMinutePrice) {
-      await client.query(
-        `UPDATE company_credit_price_history
-         SET effective_to = now()
-         WHERE tenant_id = $1 AND effective_to IS NULL`,
-        [tenantId],
-      );
-      await client.query(
-        `INSERT INTO company_credit_price_history
-          (tenant_id, price_per_minute, changed_by)
-         VALUES ($1, $2, $3)`,
-        [tenantId, input.perMinutePrice, actorUserId],
-      );
     }
     if (input.businessName !== undefined || input.timezone !== undefined) {
       await client.query(

@@ -168,7 +168,11 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
     if (!transcript) return;
     const { usageData, ...finalTranscript } = transcript;
     channel.publish({ type: 'final_transcript', ...finalTranscript });
-    publishUsage(finalTranscript.requestId ?? requestId, usageData ?? {});
+    publishUsage(
+      finalTranscript.requestId ?? requestId,
+      usageData ?? {},
+      Array.from(finalTranscript.text ?? '').length,
+    );
   }
 
   function schedulePendingFinalization(requestId) {
@@ -180,7 +184,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
     pendingFinalizationTimer.unref?.();
   }
 
-  function publishUsage(requestId, data = {}) {
+  function publishUsage(requestId, data = {}, characterCount = 0) {
     const metrics = data.metrics ?? {};
     const segmentBytes = Math.max(0, sentBytes - reportedBytes);
     reportedBytes = sentBytes;
@@ -192,6 +196,8 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
         : audioDurationMs(segmentBytes, configuration.audioFormat),
       processingLatencyMs: Number(metrics.processing_latency ?? metrics.processingLatency ?? 0) * 1000,
       audioBytes: segmentBytes,
+      characterCount,
+      providerUsage: metrics,
     });
   }
 

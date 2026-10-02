@@ -1,6 +1,7 @@
 import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
+import { calculateAndPersistUsageEventCosts } from '../../credits/usage-price-calculation.service.js';
 
 function map(row) {
   if (!row) return null;
@@ -41,6 +42,10 @@ function map(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function wholeNumber(value) {
+  return Math.max(0, Math.round(Number(value) || 0));
 }
 
 function providerParameters(rows, decrypt) {
@@ -327,6 +332,32 @@ export function completePostCallSummaryJob(summaryJobId, result, dependencies = 
         JSON.stringify(result.usage ?? {}), result.providerRequestId ?? null, result.durationMs ?? 0],
     );
     if (!updated.rowCount) throw new AppError(409, 'Summary job is not processing', 'POSTCALL_SUMMARY_NOT_PROCESSING');
+    // The summary runs after call completion, so it cannot be included in the
+    // in-call tracker. Persist it as a separate event linked to this call.
+    const summary = updated.rows[0];
+    const usage = result.usage ?? {};
+    const usageEvent = await client.query(`INSERT INTO call_metered_usage_events
+      (call_session_id,tenant_id,service_type,provider_id,model_id,model_key,
+       model_call_count,input_tokens,output_tokens,cached_input_tokens,audio_input_tokens,audio_output_tokens,
+       duration_ms,request_count,raw_usage,occurred_at)
+      VALUES($1,$2,'llm',$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,now())
+      RETURNING id`, [
+      summary.call_session_id, summary.tenant_id, summary.provider_id, summary.model_id,
+      usage.model ?? null, wholeNumber(usage.inputTokens), wholeNumber(usage.outputTokens),
+      wholeNumber(usage.cachedInputTokens), wholeNumber(usage.audioInputTokens),
+      wholeNumber(usage.audioOutputTokens), wholeNumber(result.durationMs), wholeNumber(usage.requestCount ?? 1),
+      JSON.stringify({ ...usage, stage: 'post_call_summary', summaryJobId }),
+    ]);
+    if (usageEvent.rowCount) {
+      await calculateAndPersistUsageEventCosts(client, {
+        id: usageEvent.rows[0].id, callSessionId: summary.call_session_id, tenantId: summary.tenant_id,
+        serviceType: 'llm', providerId: summary.provider_id, modelId: summary.model_id,
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+        cachedInputTokens: usage.cachedInputTokens, audioInputTokens: usage.audioInputTokens,
+        audioOutputTokens: usage.audioOutputTokens, durationMs: result.durationMs,
+        requests: usage.requestCount ?? 1,
+      });
+    }
     return map(updated.rows[0]);
   });
 }

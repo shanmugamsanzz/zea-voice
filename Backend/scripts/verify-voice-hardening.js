@@ -129,6 +129,7 @@ await assert.rejects(validateAgentRuntimeModels({
     const kind = ['stt', 'llm', 'tts'][modelQuery - 1];
     return { rowCount: 1, rows: [{
       model_id: `${kind}-model`, model_key: `${kind}-model`, model_settings: {}, model_capabilities: {},
+      runtime_connection_type: kind === 'stt' ? 'sarvam' : kind === 'llm' ? 'openai' : 'cartesia', provider_status: 'connected',
       provider_id: `${kind}-provider`, provider_name: kind === 'llm' ? 'unsupported' : `${kind}-ok`,
       provider_slug: kind === 'llm' ? 'unsupported' : `${kind}-ok`,
     }] };
@@ -149,6 +150,7 @@ await validateAgentRuntimeModels({
     const kind = ['stt', 'llm', 'tts'][inheritedQuery++];
     return { rowCount: 1, rows: [{
       model_id: `${kind}-model`, model_key: `${kind}-model`, model_settings: {}, model_capabilities: {},
+      runtime_connection_type: kind === 'stt' ? 'sarvam' : kind === 'llm' ? 'openai' : 'cartesia', provider_status: 'connected',
       provider_settings: kind === 'stt' ? { inputSampleRate: '16000', inputAudioCodec: 'pcm_s16le' } : {},
       provider_id: `${kind}-provider`, provider_name: `${kind}-inherited`, provider_slug: `${kind}-inherited`,
     }] };

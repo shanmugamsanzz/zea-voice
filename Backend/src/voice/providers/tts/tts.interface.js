@@ -8,6 +8,7 @@ const eventTypes = new Set(ttsEventTypes);
 
 export function normalizeTtsUsage(input = {}) {
   return Object.freeze({
+    requests: Math.max(0, Number(input.requests ?? input.requestCount ?? 1) || 0),
     characters: Math.max(0, Number(input.characters) || 0),
     audioOutputMs: Math.max(0, Number(input.audioOutputMs) || 0),
     audioBytes: Math.max(0, Number(input.audioBytes) || 0),

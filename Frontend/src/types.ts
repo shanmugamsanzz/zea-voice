@@ -10,7 +10,6 @@ export interface Company {
   name: string;
   status: 'active' | 'suspended' | 'pending' | 'archived';
   billingTier: 'Starter' | 'Pro' | 'Enterprise';
-  perMinutePrice: number;
   createdAt: string;
   developersCount: number;
   creditsBalance: number;

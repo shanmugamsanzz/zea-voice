@@ -673,6 +673,7 @@ export class RealtimeConversationOrchestrator {
       fetchImpl: this.dependencies.fetchImpl,
       webSocketFactory: this.dependencies.webSocketFactory,
       breaker: this.llmCircuitBreaker,
+      usageTracker: this.usageTracker,
       partialFinalizationDelayMs: env.VOICE_STT_FINALIZATION_SILENCE_MS,
     };
     this.ttsRuntimeContext = runtimeContext;
@@ -1080,7 +1081,16 @@ export class RealtimeConversationOrchestrator {
     const eventPolicy = sttEventPolicy(event.type);
     if (this.finalized) return;
     if (event.type === 'usage') {
-      this.usageTracker.record('stt', { audioInputMs: event.audioDurationMs, durationMs: event.processingLatencyMs ?? 0 });
+      this.usageTracker.record('stt', {
+        requests: event.requestCount,
+        audioInputMs: event.audioDurationMs,
+        characters: event.characterCount,
+        // Retain provider processing time as telemetry. Billable STT time is
+        // represented separately by audioInputMs, which is the actual audio
+        // submitted to the selected STT provider.
+        durationMs: event.processingLatencyMs ?? 0,
+        raw: event.providerUsage ?? undefined,
+      });
       return;
     }
     if (event.type === 'error') {

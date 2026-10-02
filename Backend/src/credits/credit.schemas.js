@@ -7,10 +7,10 @@ const amount = z.union([z.string(), z.number()])
     message: 'Amount must be a positive number with at most 4 decimal places',
   });
 
-const wholeCreditAmount = z.union([z.string(), z.number()])
+const creditAmount = z.union([z.string(), z.number()])
   .transform((value) => String(value))
-  .refine((value) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)), {
-    message: 'Credit amount must be a positive whole number',
+  .refine((value) => /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0, {
+    message: 'Credit amount must be a positive number with at most 8 decimal places',
   });
 
 export const purchaseCreditsSchema = z.object({
@@ -21,7 +21,7 @@ export const purchaseCreditsSchema = z.object({
 export const allocateCreditsSchema = purchaseCreditsSchema;
 export const adjustCreditsSchema = z.object({
   direction: z.enum(['credit', 'debit']),
-  amount: wholeCreditAmount,
+  amount: creditAmount,
   type: z.enum(['manual_adjustment', 'promotional_credit', 'refund']).default('manual_adjustment'),
   reference: z.string().trim().max(240).optional(),
   description: z.string().trim().min(1).max(500),

@@ -22,10 +22,7 @@ const mapWallet = (row, options = {}) => {
     lowBalanceThreshold: row.low_balance_threshold === undefined ? undefined : number(row.low_balance_threshold),
     updatedAt: row.updated_at,
   };
-  if (options.includePrivateFinancials && row.tenant_id) {
-    wallet.perMinutePrice = number(row.per_minute_price);
-    wallet.inrRemainder = number(row.inr_remainder);
-  }
+  if (options.includePrivateFinancials && row.tenant_id) wallet.inrRemainder = number(row.inr_remainder);
   return wallet;
 };
 const mapLedger = (row, options = {}) => {
@@ -62,7 +59,7 @@ const mapPayment = (row) => ({
   paymentId: row.id,
   paymentAmountInr: number(row.payment_amount_inr),
   creditsIssued: number(row.credits_issued),
-  perMinutePrice: number(row.price_per_credit_inr),
+  creditValueInr: number(row.price_per_credit_inr),
   previousRemainderInr: number(row.remainder_before_inr),
   remainderInr: number(row.remainder_after_inr),
   createdAt: row.created_at,
@@ -70,7 +67,7 @@ const mapPayment = (row) => ({
 
 async function companyWallet(client, companyId, lock = false) {
   const result = await client.query(`
-    SELECT w.*, o.name AS company_name, o.per_minute_price,
+    SELECT w.*, o.name AS company_name,
            w.balance - w.reserved_balance AS available_balance
     FROM company_credit_wallets w
     JOIN organizations o ON o.tenant_id = w.tenant_id AND o.deleted_at IS NULL
@@ -81,7 +78,7 @@ async function companyWallet(client, companyId, lock = false) {
 
 export async function getAdminCreditSummary(actorUserId) {
   return withPlatformAdminContext(actorUserId, async (client) => {
-    const companies = await client.query(`SELECT w.*, o.name AS company_name, o.per_minute_price,
+    const companies = await client.query(`SELECT w.*, o.name AS company_name,
         w.balance - w.reserved_balance AS available_balance
         FROM company_credit_wallets w JOIN organizations o ON o.tenant_id = w.tenant_id
         WHERE o.deleted_at IS NULL ORDER BY o.name`);
@@ -218,11 +215,7 @@ export async function getProviderCreditBalances(actorUserId, fetchImpl = fetch, 
 export function previewCompanyCreditPurchase(actorUserId, companyId, input) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const company = await companyWallet(client, companyId);
-    const conversion = convertPaymentToCredits({
-      paymentAmount: input.amount,
-      perMinutePrice: company.per_minute_price,
-      remainderAmount: company.inr_remainder,
-    });
+    const conversion = convertPaymentToCredits({ paymentAmount: input.amount, remainderAmount: company.inr_remainder });
     return {
       companyId,
       companyName: company.company_name,
@@ -230,7 +223,7 @@ export function previewCompanyCreditPurchase(actorUserId, companyId, input) {
       projectedCredits: number(company.available_balance) + conversion.credits,
       paymentAmountInr: number(conversion.paymentAmount),
       creditsIssued: conversion.credits,
-      perMinutePrice: number(conversion.perMinutePrice),
+      creditValueInr: number(conversion.creditValueInr),
       previousRemainderInr: number(conversion.previousRemainderAmount),
       remainderInr: number(conversion.remainderAmount),
     };
@@ -255,11 +248,7 @@ export function allocateCompanyCredits(actorUserId, companyId, input, idempotenc
         idempotentReplay: true,
       };
     }
-    const conversion = convertPaymentToCredits({
-      paymentAmount: input.amount,
-      perMinutePrice: company.per_minute_price,
-      remainderAmount: company.inr_remainder,
-    });
+    const conversion = convertPaymentToCredits({ paymentAmount: input.amount, remainderAmount: company.inr_remainder });
     const group = crypto.randomUUID();
     const credited = (await client.query(`UPDATE company_credit_wallets
       SET balance = balance + $2, inr_remainder = $3
@@ -270,7 +259,7 @@ export function allocateCompanyCredits(actorUserId, companyId, input, idempotenc
       (tenant_id,company_wallet_id,payment_amount_inr,price_per_credit_inr,
        remainder_before_inr,credits_issued,remainder_after_inr,reference,description,idempotency_key,actor_user_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-    [companyId, company.id, conversion.paymentAmount, conversion.perMinutePrice,
+    [companyId, company.id, conversion.paymentAmount, conversion.creditValueInr,
       conversion.previousRemainderAmount, conversion.credits, conversion.remainderAmount,
       input.reference ?? null, input.description ?? null, idempotencyKey, actorUserId])).rows[0];
     if (conversion.credits > 0) {
@@ -278,15 +267,14 @@ export function allocateCompanyCredits(actorUserId, companyId, input, idempotenc
         (transaction_group_id,company_wallet_id,tenant_id,entry_type,direction,amount,credit_amount,
          balance_after,payment_amount_inr,price_per_credit_inr,remainder_before_inr,remainder_after_inr,
          reference,description,actor_user_id,metadata)
-        VALUES ($1,$2,$3,'company_allocation','credit',$4::bigint,$4::bigint,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+        VALUES ($1,$2,$3,'company_allocation','credit',$4::numeric,$4::numeric,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
       [group, company.id, companyId, conversion.credits, credited.balance, conversion.paymentAmount,
-        conversion.perMinutePrice, conversion.previousRemainderAmount, conversion.remainderAmount,
+        conversion.creditValueInr, conversion.previousRemainderAmount, conversion.remainderAmount,
         input.reference ?? null, input.description ?? null, actorUserId,
         JSON.stringify({ paymentId: payment.id })]);
     }
     return {
-      ...mapWallet({ ...credited, company_name: company.company_name,
-        per_minute_price: company.per_minute_price }, { includePrivateFinancials: true }),
+      ...mapWallet({ ...credited, company_name: company.company_name }, { includePrivateFinancials: true }),
       allocation: mapPayment(payment),
       idempotentReplay: false,
     };
@@ -308,7 +296,7 @@ export function adjustCompanyCredits(actorUserId, companyId, input) {
     await client.query(`INSERT INTO credit_ledger_entries
       (company_wallet_id, tenant_id, entry_type, direction, amount, credit_amount, balance_after,
        reference, description, actor_user_id)
-      VALUES ($1, $2, $3, $4, $5::bigint, $5::bigint, $6, $7, $8, $9)`,
+      VALUES ($1, $2, $3, $4, $5::numeric, $5::numeric, $6, $7, $8, $9)`,
     [company.id, companyId, input.type, input.direction, input.amount, updated.balance,
       input.reference ?? null, input.description, actorUserId]);
     return mapWallet({ ...updated, company_name: company.company_name });
@@ -339,7 +327,7 @@ export function listAdminPayments(actorUserId, filters) {
         companyId: row.tenant_id,
         companyName: row.company_name,
         paymentAmountInr: number(row.payment_amount_inr),
-        perMinutePrice: number(row.price_per_credit_inr),
+        creditValueInr: number(row.price_per_credit_inr),
         remainderBeforeInr: number(row.remainder_before_inr),
         creditsIssued: number(row.credits_issued),
         remainderAfterInr: number(row.remainder_after_inr),

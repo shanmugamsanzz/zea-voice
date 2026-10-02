@@ -98,6 +98,10 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
             outputTokens: payload.usage.completion_tokens,
             totalTokens: payload.usage.total_tokens,
             cachedInputTokens: payload.usage.prompt_tokens_details?.cached_tokens,
+            audioInputTokens: payload.usage.prompt_tokens_details?.audio_tokens
+              ?? payload.usage.input_tokens_details?.audio_tokens,
+            audioOutputTokens: payload.usage.completion_tokens_details?.audio_tokens
+              ?? payload.usage.output_tokens_details?.audio_tokens,
           });
           yield normalizeLlmEvent({ type: 'usage', usage, providerRequestId }, context);
         }

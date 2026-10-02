@@ -95,6 +95,10 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
             outputTokens: payload.usageMetadata.candidatesTokenCount,
             totalTokens: payload.usageMetadata.totalTokenCount,
             cachedInputTokens: payload.usageMetadata.cachedContentTokenCount,
+            audioInputTokens: payload.usageMetadata.audioInputTokenCount
+              ?? modalityTokens(payload.usageMetadata.promptTokensDetails, 'AUDIO'),
+            audioOutputTokens: payload.usageMetadata.audioOutputTokenCount
+              ?? modalityTokens(payload.usageMetadata.candidatesTokensDetails, 'AUDIO'),
           });
           yield normalizeLlmEvent({ type: 'usage', usage, providerRequestId }, context);
         }
@@ -128,4 +132,10 @@ export function registerGeminiLlmAdapter(registry) {
   registry.register('llm', 'gemini', createGeminiLlmAdapter, {
     aliases: ['google', 'google-gemini', 'google ai', 'gemini ai'],
   });
+}
+function modalityTokens(details, modality) {
+  return (Array.isArray(details) ? details : []).reduce((total, detail) => (
+    String(detail?.modality ?? '').toUpperCase() === modality
+      ? total + Math.max(0, Number(detail.tokenCount) || 0) : total
+  ), 0);
 }

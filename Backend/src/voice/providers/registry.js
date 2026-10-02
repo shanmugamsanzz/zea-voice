@@ -2,9 +2,16 @@ import { AppError } from '../../middleware/errors.js';
 import { assertSttAdapter } from './stt/stt.interface.js';
 import { assertLlmAdapter } from './llm/llm.interface.js';
 import { assertTtsAdapter } from './tts/tts.interface.js';
+import { assertAudioToAudioAdapter } from './audio-to-audio/audio-to-audio.interface.js';
 
-const kinds = new Set(['stt', 'llm', 'tts']);
-const validators = { stt: assertSttAdapter, llm: assertLlmAdapter, tts: assertTtsAdapter };
+const requiredKinds = Object.freeze(['stt', 'llm', 'tts']);
+const kinds = new Set([...requiredKinds, 'audio_to_audio']);
+const validators = {
+  stt: assertSttAdapter,
+  llm: assertLlmAdapter,
+  tts: assertTtsAdapter,
+  audio_to_audio: assertAudioToAudioAdapter,
+};
 
 function runtimeMetadata(providerConfig = {}) {
   const capabilities = providerConfig.modelCapabilities ?? {};
@@ -39,7 +46,7 @@ export function normalizeProviderKey(value) {
 }
 
 export class ProviderAdapterRegistry {
-  #adapters = { stt: new Map(), llm: new Map(), tts: new Map() };
+  #adapters = { stt: new Map(), llm: new Map(), tts: new Map(), audio_to_audio: new Map() };
 
   register(kind, key, factory, options = {}) {
     if (!kinds.has(kind)) throw new TypeError(`Unsupported provider adapter kind: ${kind}`);
@@ -101,7 +108,7 @@ export class ProviderAdapterRegistry {
 
   preflight(runtimeProfile) {
     const incompatible = [];
-    for (const kind of kinds) {
+    for (const kind of requiredKinds) {
       try {
         this.resolve(kind, runtimeProfile?.providers?.[kind]);
       } catch (error) {
@@ -110,6 +117,18 @@ export class ProviderAdapterRegistry {
           code: error.code ?? 'VOICE_PROVIDER_ADAPTER_INVALID',
           message: error.message,
           details: error.details ?? modelIdentity(runtimeProfile?.providers?.[kind]),
+        });
+      }
+    }
+    if (runtimeProfile?.providers?.audio_to_audio) {
+      try {
+        this.resolve('audio_to_audio', runtimeProfile.providers.audio_to_audio);
+      } catch (error) {
+        incompatible.push({
+          kind: 'audio_to_audio',
+          code: error.code ?? 'VOICE_PROVIDER_ADAPTER_INVALID',
+          message: error.message,
+          details: error.details ?? modelIdentity(runtimeProfile.providers.audio_to_audio),
         });
       }
     }
@@ -123,7 +142,10 @@ export class ProviderAdapterRegistry {
     }
     return {
       compatible: true,
-      adapters: Object.fromEntries([...kinds].map((kind) => [kind, this.resolve(kind, runtimeProfile.providers[kind]).key])),
+      adapters: Object.fromEntries([
+        ...requiredKinds,
+        ...(runtimeProfile?.providers?.audio_to_audio ? ['audio_to_audio'] : []),
+      ].map((kind) => [kind, this.resolve(kind, runtimeProfile.providers[kind]).key])),
     };
   }
 
@@ -131,6 +153,25 @@ export class ProviderAdapterRegistry {
     const registration = this.resolve(kind, providerConfig);
     const adapter = await registration.factory({ providerConfig, runtimeContext });
     return validators[kind](adapter);
+  }
+
+  async validate(kind, providerConfig) {
+    const registration = this.resolve(kind, providerConfig);
+    let adapter = null;
+    try {
+      // Factories resolve credentials, endpoints, voices, language and declared
+      // audio formats before making a provider request. Validation never connects.
+      adapter = await registration.factory({ providerConfig, runtimeContext: { validationOnly: true } });
+      return registration;
+    } catch (error) {
+      const missing = /(?:API_KEY|VOICE_ID|LANGUAGE|API_URL|ENDPOINT|CREDENTIAL)_MISSING$/u.test(String(error?.code ?? ''));
+      throw new AppError(409,
+        missing ? 'Required runtime provider parameters are missing.' : 'Runtime adapter is not available for this provider/model.',
+        missing ? 'VOICE_RUNTIME_REQUIRED_PARAMETER_MISSING' : 'VOICE_RUNTIME_ADAPTER_UNAVAILABLE',
+        { kind, ...modelIdentity(providerConfig), reason: error?.code ?? 'VALIDATION_FAILED' });
+    } finally {
+      await adapter?.close?.();
+    }
   }
 
   unregister(kind, key) {
@@ -150,16 +191,30 @@ export const providerAdapterRegistry = new ProviderAdapterRegistry();
 export const registerSttAdapter = (key, factory, options) => providerAdapterRegistry.register('stt', key, factory, options);
 export const registerLlmAdapter = (key, factory, options) => providerAdapterRegistry.register('llm', key, factory, options);
 export const registerTtsAdapter = (key, factory, options) => providerAdapterRegistry.register('tts', key, factory, options);
+export const registerAudioToAudioAdapter = (key, factory, options) => providerAdapterRegistry.register('audio_to_audio', key, factory, options);
 
 export const assertRuntimeAdapterCompatibility = (runtimeProfile, registry = providerAdapterRegistry) => (
   registry.preflight(runtimeProfile)
 );
 
-export async function createRuntimeAdapters(runtimeProfile, runtimeContext = {}, registry = providerAdapterRegistry) {
+export async function validateRuntimeAdapterConfiguration(runtimeProfile, registry = providerAdapterRegistry) {
   registry.preflight(runtimeProfile);
   const adapters = {};
+  for (const kind of [
+    ...requiredKinds,
+    ...(runtimeProfile?.providers?.audio_to_audio ? ['audio_to_audio'] : []),
+  ]) adapters[kind] = (await registry.validate(kind, runtimeProfile.providers[kind])).key;
+  return { compatible: true, adapters };
+}
+
+export async function createRuntimeAdapters(runtimeProfile, runtimeContext = {}, registry = providerAdapterRegistry) {
+  await validateRuntimeAdapterConfiguration(runtimeProfile, registry);
+  const adapters = {};
   try {
-    for (const kind of kinds) {
+    for (const kind of [
+      ...requiredKinds,
+      ...(runtimeProfile?.providers?.audio_to_audio ? ['audio_to_audio'] : []),
+    ]) {
       adapters[kind] = await registry.create(kind, runtimeProfile.providers[kind], runtimeContext);
     }
     return adapters;

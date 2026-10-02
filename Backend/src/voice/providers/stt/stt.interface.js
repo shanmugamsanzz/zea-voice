@@ -33,6 +33,10 @@ export function normalizeSttEvent(input, context = {}) {
       processingLatencyMs: Number.isFinite(Number(input.processingLatencyMs))
         ? Math.max(0, Number(input.processingLatencyMs)) : null,
       audioBytes: Number.isFinite(Number(input.audioBytes)) ? Math.max(0, Number(input.audioBytes)) : null,
+      requestCount: Math.max(0, Number(input.requestCount ?? input.requests ?? 1) || 0),
+      characterCount: Math.max(0, Number(input.characterCount ?? input.characters ?? 0) || 0),
+      providerUsage: input.providerUsage && typeof input.providerUsage === 'object'
+        ? structuredClone(input.providerUsage) : null,
     });
   }
   if (input.type === 'error') {

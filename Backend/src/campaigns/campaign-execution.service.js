@@ -35,7 +35,7 @@ async function claimTask(taskId) {
         p.auth_id, p.auth_token_encrypted, p.base_url, p.answer_url, p.hangup_url,
         p.recording_callback_url, l.max_total_concurrency,
         w.id AS wallet_id,w.balance - w.reserved_balance AS available_credits,
-        o.per_minute_price,s.low_credit_threshold
+        s.low_credit_threshold
       FROM campaign_tasks t
       JOIN campaigns c ON c.id = t.campaign_id AND c.tenant_id = t.tenant_id
       JOIN voice_agents a ON a.id = t.agent_id

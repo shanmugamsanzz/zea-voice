@@ -12,6 +12,7 @@ import {
 } from '../voice/integrations/postcall-summary-config.js';
 import { normalizeTtsUsageLimitSettings } from '../voice/tts-usage-limit-config.js';
 import { normalizeLiveMemorySettings } from '../voice/interaction/live-memory-config.js';
+import { isRuntimeConnectionLiveEligible } from '../providers/runtime-connection-types.js';
 
 const legacyAgentTtsProviderOverrides = new Set([
   'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
@@ -103,10 +104,10 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
     const modelId = field === 'postCallSummaryModelId' ? summary.modelId : input[field];
     const result = await client.query(`SELECT m.id model_id,m.model_key,m.settings model_settings,
       m.capabilities model_capabilities,p.id provider_id,p.name provider_name,p.slug provider_slug,
-      COALESCE((SELECT jsonb_object_agg(x.key,x.plain_value)
+      p.runtime_connection_type,p.status provider_status,
+      COALESCE((SELECT jsonb_object_agg(x.key,COALESCE(x.plain_value, '__configured_secret__'))
         FROM ai_provider_parameters x
-        WHERE x.provider_id=p.id AND x.plain_value IS NOT NULL AND x.is_secret=false
-          AND lower(x.key) !~ '(api[_.-]?key|token|secret|password|credential|auth)'), '{}'::jsonb) provider_settings
+        WHERE x.provider_id=p.id AND (x.plain_value IS NOT NULL OR x.encrypted_value IS NOT NULL)), '{}'::jsonb) provider_settings
       FROM provider_models m JOIN ai_providers p ON p.id=m.provider_id
       WHERE m.id=$1 AND m.status='active' AND m.deleted_at IS NULL AND p.type=$2::ai_provider_type
       AND p.status='connected' AND p.deleted_at IS NULL`, [modelId, type]);
@@ -114,8 +115,14 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
       field === 'postCallSummaryModelId' ? 'AGENT_SUMMARY_MODEL_UNAVAILABLE' : 'AGENT_MODEL_UNAVAILABLE',
       { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field });
     const row = result.rows[0];
+    if (!isRuntimeConnectionLiveEligible(type, row.runtime_connection_type, row.provider_status)) {
+      throw new AppError(400, `Selected ${label} model is configuration only and cannot be used in a live agent`,
+        field === 'postCallSummaryModelId' ? 'AGENT_SUMMARY_MODEL_CONFIGURATION_ONLY' : 'AGENT_MODEL_CONFIGURATION_ONLY',
+        { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field,
+          providerId: row.provider_id, modelId: row.model_id, runtimeConnectionType: row.runtime_connection_type });
+    }
     try {
-      registry.resolve(type, {
+      await registry.validate(type, {
         providerId: row.provider_id,
         providerName: row.provider_name,
         providerSlug: row.provider_slug,
@@ -127,7 +134,9 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
       });
     } catch (error) {
       throw new AppError(400,
-        `Selected ${label} model cannot run in the voice engine: ${error.message}`,
+        error.code === 'VOICE_RUNTIME_REQUIRED_PARAMETER_MISSING'
+          ? `Selected ${label} model is missing required runtime provider parameters`
+          : 'Runtime adapter is not available for this provider/model.',
         field === 'postCallSummaryModelId'
           ? 'AGENT_SUMMARY_MODEL_RUNTIME_INCOMPATIBLE'
           : 'AGENT_MODEL_RUNTIME_INCOMPATIBLE',

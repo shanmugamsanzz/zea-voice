@@ -1,5 +1,6 @@
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { isRuntimeConnectionLiveEligible } from '../providers/runtime-connection-types.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
 
@@ -50,11 +51,11 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
     const models = await client.query(
       `SELECT
           stt.id stt_model_id, stt.model_key stt_model_key, stt.display_name stt_model_name,
-          sttp.id stt_provider_id, sttp.name stt_provider_name,
+          sttp.id stt_provider_id, sttp.name stt_provider_name, sttp.runtime_connection_type stt_runtime_connection_type,
           llm.id llm_model_id, llm.model_key llm_model_key, llm.display_name llm_model_name,
-          llmp.id llm_provider_id, llmp.name llm_provider_name,
+          llmp.id llm_provider_id, llmp.name llm_provider_name, llmp.runtime_connection_type llm_runtime_connection_type,
           tts.id tts_model_id, tts.model_key tts_model_key, tts.display_name tts_model_name,
-          ttsp.id tts_provider_id, ttsp.name tts_provider_name
+          ttsp.id tts_provider_id, ttsp.name tts_provider_name, ttsp.runtime_connection_type tts_runtime_connection_type
          FROM provider_models stt JOIN ai_providers sttp ON sttp.id=stt.provider_id
          JOIN provider_models llm ON llm.id=$2 JOIN ai_providers llmp ON llmp.id=llm.provider_id
          JOIN provider_models tts ON tts.id=$3 JOIN ai_providers ttsp ON ttsp.id=tts.provider_id
@@ -71,6 +72,12 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
       throw new AppError(409, 'Agent STT, LLM, or TTS configuration is unavailable', 'VOICE_AGENT_MODEL_UNAVAILABLE');
     }
     const configured = models.rows[0];
+    for (const type of ['stt', 'llm', 'tts']) {
+      if (!isRuntimeConnectionLiveEligible(type, configured[`${type}_runtime_connection_type`], 'connected')) {
+        throw new AppError(409, `Agent ${type.toUpperCase()} model is configuration only and cannot be used in a live call`,
+          'VOICE_AGENT_MODEL_CONFIGURATION_ONLY', { type, runtimeConnectionType: configured[`${type}_runtime_connection_type`] });
+      }
+    }
     return {
       tenantId: agent.tenant_id,
       workspaceId: agent.workspace_id,

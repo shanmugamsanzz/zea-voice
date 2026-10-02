@@ -9,7 +9,6 @@ interface CompanyWallet {
   balance: number;
   reservedBalance: number;
   availableBalance: number;
-  perMinutePrice: number;
   inrRemainder: number;
 }
 
@@ -30,7 +29,7 @@ interface CreditLedger {
 
 interface PaymentHistory {
   items: Array<{
-    id: string; companyName: string; paymentAmountInr: number; perMinutePrice: number;
+    id: string; companyName: string; paymentAmountInr: number; creditValueInr: number;
     remainderBeforeInr: number; creditsIssued: number; remainderAfterInr: number;
     reference: string | null; description: string | null; actorName: string | null; createdAt: string;
   }>;
@@ -57,7 +56,7 @@ interface ProviderBalance {
 interface PurchaseResponse extends CompanyWallet {
   idempotentReplay: boolean;
   allocation: {
-    paymentId: string; paymentAmountInr: number; creditsIssued: number; perMinutePrice: number;
+    paymentId: string; paymentAmountInr: number; creditsIssued: number; creditValueInr: number;
     previousRemainderInr: number; remainderInr: number; createdAt: string;
   };
 }
@@ -65,7 +64,7 @@ interface PurchaseResponse extends CompanyWallet {
 const money = (value: number) => new Intl.NumberFormat('en-IN', {
   style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 4,
 }).format(value);
-const credits = (value: number) => `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value)} credits`;
+const credits = (value: number) => `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 8 }).format(value)} credits`;
 const readableType = (value: string) => value.split('_').map((part) =>
   `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(' ');
 const newIdempotencyKey = () => globalThis.crypto?.randomUUID?.()
@@ -129,7 +128,7 @@ export function CreditsManagerView() {
   const purchasePreview = useMemo(() => {
     if (!selectedWallet) return null;
     const payment = fixedUnits(paymentAmount);
-    const price = fixedUnits(selectedWallet.perMinutePrice);
+    const price = fixedUnits(1);
     const priorRemainder = fixedUnits(selectedWallet.inrRemainder);
     if (payment <= 0 || price <= 0) return null;
     const total = payment + priorRemainder;
@@ -197,7 +196,7 @@ export function CreditsManagerView() {
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Credit Manager</h2>
-          <p className="text-sm text-slate-400 mt-1 font-medium">Manage company payments, whole call credits and private INR remainders.</p>
+          <p className="text-sm text-slate-400 mt-1 font-medium">Manage company credit balances. One credit always equals one rupee.</p>
         </div>
         <button type="button" onClick={() => { void loadBilling(true); void loadProviders(true); }} disabled={loading || providerLoading}
           className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold disabled:opacity-50">
@@ -247,9 +246,9 @@ export function CreditsManagerView() {
         <div className="flex items-center justify-between mb-4"><div><h3 className="text-base font-bold text-slate-800">Company Credit Wallets</h3><p className="text-xs text-slate-400 mt-1">Payments and pricing are visible only to Super Admin.</p></div><span className="text-xs font-bold text-slate-400">{summary?.companyWallets.length ?? 0} companies</span></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[900px] text-sm text-left">
-            <thead><tr className="border-b border-slate-200 text-xs uppercase text-slate-400"><th className="py-2">Company</th><th className="py-2 text-right">Price / minute</th><th className="py-2 text-right">Balance</th><th className="py-2 text-right">Reserved</th><th className="py-2 text-right">Available</th><th className="py-2 text-right">INR remainder</th><th className="py-2 text-right">Action</th></tr></thead>
+            <thead><tr className="border-b border-slate-200 text-xs uppercase text-slate-400"><th className="py-2">Company</th><th className="py-2 text-right">Credit value</th><th className="py-2 text-right">Balance</th><th className="py-2 text-right">Reserved</th><th className="py-2 text-right">Available</th><th className="py-2 text-right">INR remainder</th><th className="py-2 text-right">Action</th></tr></thead>
             <tbody>{summary?.companyWallets.map((wallet) => (
-              <tr key={wallet.id} className="border-b border-slate-100 last:border-0"><td className="py-3 font-bold text-slate-800">{wallet.companyName}</td><td className="py-3 text-right font-mono">{money(wallet.perMinutePrice)}</td><td className="py-3 text-right font-mono">{credits(wallet.balance)}</td><td className="py-3 text-right font-mono text-amber-600">{credits(wallet.reservedBalance)}</td><td className="py-3 text-right font-mono font-bold text-emerald-700">{credits(wallet.availableBalance)}</td><td className="py-3 text-right font-mono">{money(wallet.inrRemainder)}</td><td className="py-3 text-right"><button type="button" onClick={() => openPurchase(wallet)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700">Add payment</button></td></tr>
+              <tr key={wallet.id} className="border-b border-slate-100 last:border-0"><td className="py-3 font-bold text-slate-800">{wallet.companyName}</td><td className="py-3 text-right font-mono">₹1 / credit</td><td className="py-3 text-right font-mono">{credits(wallet.balance)}</td><td className="py-3 text-right font-mono text-amber-600">{credits(wallet.reservedBalance)}</td><td className="py-3 text-right font-mono font-bold text-emerald-700">{credits(wallet.availableBalance)}</td><td className="py-3 text-right font-mono">{money(wallet.inrRemainder)}</td><td className="py-3 text-right"><button type="button" onClick={() => openPurchase(wallet)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700">Add payment</button></td></tr>
             ))}</tbody>
           </table>
           {loading && !summary && <div className="mt-3 min-w-[900px] space-y-2" aria-label="Loading company credit wallets">{[1, 2, 3, 4].map((item) => <div key={item} className="grid h-12 animate-pulse grid-cols-7 items-center gap-4 border-b border-slate-100"><div className="h-3 rounded bg-slate-200" />{[1, 2, 3, 4, 5].map((cell) => <div key={cell} className="ml-auto h-3 w-16 rounded bg-slate-100" />)}<div className="ml-auto h-8 w-24 rounded-lg bg-slate-100" /></div>)}</div>}
@@ -260,7 +259,7 @@ export function CreditsManagerView() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <section className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex justify-between mb-3"><h3 className="font-bold text-slate-800">Payment History</h3><span className="text-xs font-bold text-slate-400">{payments?.pagination.total ?? 0} payments</span></div>
-          <div className="space-y-3">{payments?.items.map((payment) => <div key={payment.id} className="rounded-xl border border-slate-200 p-3 text-sm"><div className="flex justify-between gap-3"><div><p className="font-bold text-slate-800">{payment.companyName}</p><p className="text-xs text-slate-500">{payment.actorName || 'Super Admin'} · {new Date(payment.createdAt).toLocaleString()}</p></div><div className="text-right"><p className="font-black text-indigo-700">{money(payment.paymentAmountInr)}</p><p className="text-xs font-bold text-emerald-700">+{credits(payment.creditsIssued)}</p></div></div><p className="text-xs text-slate-500 mt-2">Rate {money(payment.perMinutePrice)} · remainder {money(payment.remainderBeforeInr)} → {money(payment.remainderAfterInr)}</p>{payment.reference && <p className="text-xs text-slate-400 mt-1">Reference: {payment.reference}</p>}</div>)}</div>
+          <div className="space-y-3">{payments?.items.map((payment) => <div key={payment.id} className="rounded-xl border border-slate-200 p-3 text-sm"><div className="flex justify-between gap-3"><div><p className="font-bold text-slate-800">{payment.companyName}</p><p className="text-xs text-slate-500">{payment.actorName || 'Super Admin'} · {new Date(payment.createdAt).toLocaleString()}</p></div><div className="text-right"><p className="font-black text-indigo-700">{money(payment.paymentAmountInr)}</p><p className="text-xs font-bold text-emerald-700">+{credits(payment.creditsIssued)}</p></div></div><p className="text-xs text-slate-500 mt-2">₹1 per credit · remainder {money(payment.remainderBeforeInr)} → {money(payment.remainderAfterInr)}</p>{payment.reference && <p className="text-xs text-slate-400 mt-1">Reference: {payment.reference}</p>}</div>)}</div>
           {payments && <Pagination page={paymentPage} totalPages={payments.pagination.totalPages} loading={loading} onChange={setPaymentPage} />}
         </section>
 
@@ -275,7 +274,7 @@ export function CreditsManagerView() {
         <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
           <div className="flex justify-between gap-4"><div><h3 className="text-xl font-black text-slate-900">Add company payment</h3><p className="text-sm text-slate-500">{selectedWallet.companyName}</p></div><button type="button" disabled={purchasing} onClick={() => setSelectedWallet(null)} className="text-2xl text-slate-400">×</button></div>
           {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div>}
-          <div className="mt-5 grid grid-cols-2 gap-3 rounded-xl bg-indigo-50 p-4 text-sm"><div><p className="text-xs font-bold uppercase text-indigo-500">Price per credit</p><p className="font-black text-indigo-900">{money(selectedWallet.perMinutePrice)}</p></div><div><p className="text-xs font-bold uppercase text-indigo-500">Carried remainder</p><p className="font-black text-indigo-900">{money(selectedWallet.inrRemainder)}</p></div></div>
+          <div className="mt-5 grid grid-cols-2 gap-3 rounded-xl bg-indigo-50 p-4 text-sm"><div><p className="text-xs font-bold uppercase text-indigo-500">Credit value</p><p className="font-black text-indigo-900">₹1.00</p></div><div><p className="text-xs font-bold uppercase text-indigo-500">Carried remainder</p><p className="font-black text-indigo-900">{money(selectedWallet.inrRemainder)}</p></div></div>
           <div className="mt-5 space-y-4"><label className="block text-sm font-bold text-slate-600">Payment amount (INR)<input autoFocus type="number" min="0.0001" step="0.0001" value={paymentAmount} onChange={(event) => { setPaymentAmount(event.target.value); setPurchaseKey(newIdempotencyKey()); }} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-slate-900 outline-none focus:border-indigo-500" placeholder="10000" /></label><label className="block text-sm font-bold text-slate-600">Payment reference (optional)<input value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} maxLength={240} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 outline-none focus:border-indigo-500" placeholder="Receipt or transaction ID" /></label><label className="block text-sm font-bold text-slate-600">Description (optional)<textarea value={paymentDescription} onChange={(event) => setPaymentDescription(event.target.value)} maxLength={500} rows={2} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 outline-none focus:border-indigo-500" /></label></div>
           {purchasePreview && <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm"><p className="font-black text-emerald-900">This payment adds {credits(purchasePreview.creditsIssued)}</p><p className="mt-1 text-emerald-700">Projected balance: {credits(purchasePreview.projectedBalance)}</p><p className="text-emerald-700">New INR remainder: {money(purchasePreview.remainderInr)}</p></div>}
           <div className="mt-6 flex justify-end gap-3"><button type="button" disabled={purchasing} onClick={() => setSelectedWallet(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600">Cancel</button><button type="button" disabled={!purchasePreview || purchasing} onClick={() => void submitPurchase()} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{purchasing ? 'Adding credits...' : 'Confirm payment'}</button></div>

@@ -31,6 +31,8 @@ function usageRecord(job, usage, finishReason) {
     outputTokens: Number(usage?.outputTokens ?? 0),
     totalTokens: Number(usage?.totalTokens ?? 0),
     cachedInputTokens: Number(usage?.cachedInputTokens ?? 0),
+    audioInputTokens: Number(usage?.audioInputTokens ?? 0),
+    audioOutputTokens: Number(usage?.audioOutputTokens ?? 0),
     requestCount: 1,
     finishReason: finishReason ?? null,
   };

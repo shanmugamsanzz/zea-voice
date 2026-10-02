@@ -69,7 +69,6 @@ interface CompanyApiData {
   organizationName: string; workspaceName: string;
   legalName: string | null; firstName: string | null; lastName: string | null; email: string;
   businessPhone: string | null; website: string | null; billingTier: 'starter' | 'pro' | 'enterprise';
-  perMinutePrice: number;
   addressLine1: string | null; addressLine2: string | null; state: string | null; country: string | null;
   postalCode: string | null; timezone: string; status: 'pending' | 'active' | 'suspended' | 'archived';
   teamSize: number; phoneNumbersCount: number; creditsBalance: number; monthlySpend: number; createdAt: string;
@@ -96,7 +95,9 @@ interface ProviderApiData {
   id: string;
   name: string;
   slug: string;
-  type: 'llm' | 'tts' | 'stt';
+  type: 'llm' | 'tts' | 'stt' | 'audio_to_audio' | 'telephony';
+  runtimeConnectionType: string | null;
+  runtimeConnection: { value: string; label: string; availability: 'supported' | 'adapter_required' } | null;
   status: 'connected' | 'disconnected' | 'error';
   baseUrl: string | null;
   latencyMs: number | null;
@@ -107,11 +108,41 @@ interface ProviderApiData {
   updatedAt: string;
 }
 
+type ProviderType = ProviderApiData['type'];
+type RuntimeConnectionTypes = Record<ProviderType, Array<{
+  value: string;
+  label: string;
+  availability: 'supported' | 'adapter_required';
+}>>;
+
+const EMPTY_RUNTIME_CONNECTION_TYPES: RuntimeConnectionTypes = {
+  llm: [], tts: [], stt: [], audio_to_audio: [], telephony: [],
+};
+
 interface ProviderModelApiData {
-  id: string; providerId: string; providerName: string; providerType: 'llm' | 'tts' | 'stt';
+  id: string; providerId: string; providerName: string; providerType: ProviderType;
   modelKey: string; displayName: string; status: 'active' | 'inactive';
   capabilities: Record<string, unknown>; settings: Record<string, unknown>;
+  runtimeConnectionType: string | null;
+  runtimeConnection: { value: string; label: string; availability: 'supported' | 'adapter_required' } | null;
+  runtimeStatus: 'runtime_supported' | 'configuration_only';
+  providerConnectionStatus: 'connected' | 'disconnected' | 'error' | null;
   createdAt: string; updatedAt: string;
+}
+
+interface ProviderModelPriceApiData {
+  id: string; providerId: string; modelId: string;
+  parameterName: string; currency: string; unitName: string;
+  unitQuantity: number; price: number; effectiveDate: string;
+  status: 'active' | 'inactive'; notes: string | null;
+  createdBy: string | null; updatedBy: string | null;
+  createdAt: string; updatedAt: string;
+}
+
+interface ModelPriceDraft {
+  parameterName: string; currency: string; unitName: string;
+  unitQuantity: string; price: string; effectiveDate: string;
+  status: 'active' | 'inactive'; notes: string;
 }
 
 interface TelephonyAccountApiData {
@@ -163,7 +194,6 @@ function companyFromApi(value: CompanyApiData): Company {
     id: value.tenantId, name: value.businessName, status: value.status, billingTier,
     createdAt: new Date(value.createdAt).toLocaleDateString(), developersCount: value.teamSize,
     creditsBalance: value.creditsBalance, phoneNumbersCount: value.phoneNumbersCount,
-    perMinutePrice: value.perMinutePrice,
     monthlySpend: value.monthlySpend,
     primaryContact: [value.firstName, value.lastName].filter(Boolean).join(' ') + ` (${value.email})`,
     firstName: value.firstName ?? undefined, lastName: value.lastName ?? undefined, email: value.email,
@@ -412,7 +442,6 @@ function CompaniesListView() {
   const [website, setWebsite] = useState('');
   const [timezone, setTimezone] = useState('Asia/Kolkata');
   const [billingTier, setBillingTier] = useState<'starter' | 'pro' | 'enterprise'>('starter');
-  const [perMinutePrice, setPerMinutePrice] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -437,7 +466,7 @@ function CompaniesListView() {
     try {
       await apiRequest<CompanyApiData>('/admin/companies', { method: 'POST', body: JSON.stringify({
         businessName, organizationName, workspaceName, legalName: organizationName, firstName, lastName, email, businessPhone,
-        website, billingTier, perMinutePrice: Number(perMinutePrice), addressLine1: address, state, country, postalCode: zip,
+        website, billingTier, addressLine1: address, state, country, postalCode: zip,
         timezone, status: 'active', locale: 'en-US', currency: 'INR',
       }) });
       setSuccessMessage(`Organization "${businessName}" successfully created.`);
@@ -482,7 +511,6 @@ function CompaniesListView() {
           firstName: editingCompany.firstName, lastName: editingCompany.lastName,
           email: editingCompany.email, businessPhone: editingCompany.businessPhone,
           website: editingCompany.website, billingTier: editingCompany.billingTier,
-          perMinutePrice: Number(editingCompany.perMinutePrice),
           addressLine1: editingCompany.addressLine1, addressLine2: editingCompany.addressLine2,
           state: editingCompany.state, country: editingCompany.country,
           postalCode: editingCompany.postalCode, timezone: editingCompany.timezone,
@@ -688,7 +716,6 @@ function CompaniesListView() {
               <label className="font-bold text-slate-500">Business Phone<input required value={editingCompany.businessPhone ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, businessPhone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Website<input value={editingCompany.website ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, website: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Billing Tier<select value={editingCompany.billingTier} onChange={(e) => setEditingCompany({ ...editingCompany, billingTier: e.target.value as CompanyApiData['billingTier'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800"><option value="starter">Starter</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select></label>
-              <label className="font-bold text-slate-500">Per-Minute Price (₹)<input type="number" min="0.0001" step="0.0001" required value={editingCompany.perMinutePrice} onChange={(e) => setEditingCompany({ ...editingCompany, perMinutePrice: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Time Zone<input list="company-timezone-options" required value={editingCompany.timezone} onChange={(e) => setEditingCompany({ ...editingCompany, timezone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500 md:col-span-2">Street Address<input value={editingCompany.addressLine1 ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, addressLine1: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">State<input value={editingCompany.state ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, state: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
@@ -838,19 +865,6 @@ function CompaniesListView() {
                         <option value="enterprise">Enterprise</option>
                       </select>
                     </div>
-                  </div>
-                  <div className="mt-3">
-                    <label className="block text-[10px] text-slate-500 mb-1 font-bold">Per-Minute Price (₹)</label>
-                    <input
-                      type="number"
-                      required
-                      min="0.0001"
-                      step="0.0001"
-                      value={perMinutePrice}
-                      onChange={(e) => setPerMinutePrice(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
-                      placeholder="e.g. 5.50"
-                    />
                   </div>
                 </div>
 
@@ -1044,10 +1058,6 @@ function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: (
             <div>
               <span className="text-slate-400 block">Monthly Spend</span>
               <span className="text-slate-700">₹{company.monthlySpend.toLocaleString()}</span>
-            </div>
-            <div>
-              <span className="text-slate-400 block">Per-Minute Price</span>
-              <span className="text-slate-700">₹{company.perMinutePrice.toFixed(2)}</span>
             </div>
             <div>
               <span className="text-slate-400 block">Assigned Numbers</span>
@@ -1542,11 +1552,173 @@ function UsersListView() {
 /* ==========================================
    4. VOICE PROVIDERS VIEW
    ========================================== */
+function emptyModelPriceDraft(): ModelPriceDraft {
+  return {
+    parameterName: '', currency: 'USD', unitName: '', unitQuantity: '1000000', price: '',
+    effectiveDate: new Date().toISOString().slice(0, 10), status: 'active', notes: '',
+  };
+}
+
+function ModelPriceAssignmentPanel({ providers }: { providers: ProviderApiData[] }) {
+  const [serviceType, setServiceType] = useState<ProviderType>('llm');
+  const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [models, setModels] = useState<ProviderModelApiData[]>([]);
+  const [prices, setPrices] = useState<ProviderModelPriceApiData[]>([]);
+  const [drafts, setDrafts] = useState<ModelPriceDraft[]>([emptyModelPriceDraft()]);
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+  const [history, setHistory] = useState<{ parameterName: string; rows: ProviderModelPriceApiData[] } | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadingPrices, setLoadingPrices] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const matchingProviders = providers.filter((provider) => provider.type === serviceType);
+  const selectedProvider = matchingProviders.find((provider) => provider.id === providerId) ?? null;
+  const selectedModel = models.find((model) => model.id === modelId) ?? null;
+
+  useEffect(() => {
+    setProviderId(''); setModelId(''); setModels([]); setPrices([]); setEditingPriceId(null);
+    setDrafts([emptyModelPriceDraft()]); setError(''); setSuccess('');
+  }, [serviceType]);
+
+  useEffect(() => {
+    if (!providerId) { setModels([]); setModelId(''); setPrices([]); return; }
+    let cancelled = false;
+    setLoadingModels(true); setError(''); setModelId(''); setPrices([]);
+    void apiRequest<ProviderModelApiData[]>(`/admin/providers/${providerId}/models`)
+      .then((data) => { if (!cancelled) setModels(data); })
+      .catch((requestError) => { if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Provider models could not be loaded'); })
+      .finally(() => { if (!cancelled) setLoadingModels(false); });
+    return () => { cancelled = true; };
+  }, [providerId]);
+
+  const loadPrices = async (requestedModelId = modelId) => {
+    if (!requestedModelId) return;
+    setLoadingPrices(true); setError('');
+    try {
+      setPrices(await apiRequest<ProviderModelPriceApiData[]>(`/admin/providers/models/${requestedModelId}/prices`));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Model price rows could not be loaded');
+    } finally { setLoadingPrices(false); }
+  };
+
+  const chooseModel = (nextModelId: string) => {
+    setModelId(nextModelId); setPrices([]); setEditingPriceId(null); setDrafts([emptyModelPriceDraft()]);
+    if (nextModelId) void loadPrices(nextModelId);
+  };
+
+  const updateDraft = (index: number, field: keyof ModelPriceDraft, value: string) => {
+    setDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? { ...draft, [field]: value } : draft));
+  };
+
+  const savePrices = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!modelId) return;
+    const invalid = drafts.some((draft) => !draft.parameterName.trim() || !draft.currency.trim() || !draft.unitName.trim()
+      || !draft.unitQuantity.trim() || !draft.price.trim() || !draft.effectiveDate);
+    if (invalid) { setError('Complete every required price field before saving.'); return; }
+    setSaving(true); setError(''); setSuccess('');
+    const parameters = drafts.map((draft) => ({
+      parameterName: draft.parameterName.trim(), currency: draft.currency.trim(), unitName: draft.unitName.trim(),
+      unitQuantity: Number(draft.unitQuantity), price: Number(draft.price), effectiveDate: draft.effectiveDate,
+      status: draft.status, notes: draft.notes.trim() || null,
+    }));
+    try {
+      if (editingPriceId) {
+        const updated = await apiRequest<ProviderModelPriceApiData>(`/admin/providers/model-prices/${editingPriceId}`, {
+          method: 'PATCH', body: JSON.stringify(parameters[0]),
+        });
+        setPrices((current) => current.map((row) => row.id === updated.id ? updated : row));
+        setSuccess('Price parameter updated.');
+      } else {
+        const created = await apiRequest<ProviderModelPriceApiData[]>(`/admin/providers/models/${modelId}/prices`, {
+          method: 'POST', body: JSON.stringify({ providerId, parameters }),
+        });
+        setPrices((current) => [...created, ...current]);
+        setSuccess(`${created.length} price parameter${created.length === 1 ? '' : 's'} saved.`);
+      }
+      setEditingPriceId(null); setDrafts([emptyModelPriceDraft()]);
+      await loadPrices();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Model prices could not be saved');
+    } finally { setSaving(false); }
+  };
+
+  const editPrice = (row: ProviderModelPriceApiData) => {
+    setEditingPriceId(row.id);
+    setDrafts([{
+      parameterName: row.parameterName, currency: row.currency, unitName: row.unitName,
+      unitQuantity: String(row.unitQuantity), price: String(row.price),
+      effectiveDate: row.effectiveDate.slice(0, 10), status: row.status, notes: row.notes ?? '',
+    }]);
+    setSuccess(''); setError('');
+  };
+
+  const togglePriceStatus = async (row: ProviderModelPriceApiData) => {
+    setError('');
+    try {
+      const updated = await apiRequest<ProviderModelPriceApiData>(`/admin/providers/model-prices/${row.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: row.status === 'active' ? 'inactive' : 'active' }),
+      });
+      setPrices((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Price status could not be updated'); }
+  };
+
+  const showHistory = async (row: ProviderModelPriceApiData) => {
+    if (!modelId) return;
+    setError('');
+    try {
+      const rows = await apiRequest<ProviderModelPriceApiData[]>(`/admin/providers/models/${modelId}/prices/history?parameterName=${encodeURIComponent(row.parameterName)}`);
+      setHistory({ parameterName: row.parameterName, rows });
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Price history could not be loaded'); }
+  };
+
+  return <div className="space-y-5">
+    <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-5">
+      <div className="mb-4"><h3 className="text-sm font-black text-slate-800">Model Price Assignment</h3><p className="mt-1 text-xs text-slate-500">Assign price parameters to a configured provider model. This does not calculate call cost.</p></div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Service Type<select value={serviceType} onChange={(event) => setServiceType(event.target.value as ProviderType)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-indigo-500"><option value="llm">LLM</option><option value="stt">STT</option><option value="tts">TTS</option><option value="audio_to_audio">Audio-to-Audio</option><option value="telephony">Telephony / Plivo</option></select></label>
+        <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Provider<select value={providerId} onChange={(event) => setProviderId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-indigo-500"><option value="">Select provider</option>{matchingProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+        <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Model<select disabled={!providerId || loadingModels} value={modelId} onChange={(event) => chooseModel(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-100"><option value="">{loadingModels ? 'Loading models...' : 'Select model'}</option>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName} ({model.modelKey})</option>)}</select></label>
+      </div>
+      {providerId && !loadingModels && models.length === 0 && <p className="mt-3 text-xs font-semibold text-amber-700">Create a model for this provider before assigning prices.</p>}
+    </div>
+
+    {error && <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-xs font-bold text-red-700">{error}</div>}
+    {success && <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-700">{success}</div>}
+
+    {selectedProvider && selectedModel && <form onSubmit={savePrices} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h4 className="text-sm font-black text-slate-800">{editingPriceId ? 'Edit Price Parameter' : 'Add Price Parameters'}</h4><p className="mt-1 text-xs text-slate-500">{selectedProvider.name} / {selectedModel.displayName}</p></div>{!editingPriceId && <button type="button" onClick={() => setDrafts((current) => [...current, emptyModelPriceDraft()])} className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700"><Plus className="mr-1 inline h-3.5 w-3.5" />Add parameter</button>}</div>
+      <div className="space-y-3">{drafts.map((draft, index) => <div key={index} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 md:grid-cols-[1.2fr_.55fr_1fr_.8fr_.8fr_1fr_auto]">
+        <input required value={draft.parameterName} onChange={(event) => updateDraft(index, 'parameterName', event.target.value)} placeholder="Parameter, e.g. Input Tokens" className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <input required value={draft.currency} onChange={(event) => updateDraft(index, 'currency', event.target.value.toUpperCase())} maxLength={3} placeholder="USD" className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs uppercase outline-none focus:border-indigo-500" />
+        <input required value={draft.unitName} onChange={(event) => updateDraft(index, 'unitName', event.target.value)} placeholder="per 1M tokens" className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <input required min="0.00000001" step="any" type="number" value={draft.unitQuantity} onChange={(event) => updateDraft(index, 'unitQuantity', event.target.value)} placeholder="Quantity" className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <input required min="0" step="any" type="number" value={draft.price} onChange={(event) => updateDraft(index, 'price', event.target.value)} placeholder="Price" className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <input required type="date" value={draft.effectiveDate} onChange={(event) => updateDraft(index, 'effectiveDate', event.target.value)} className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <button type="button" disabled={editingPriceId !== null || drafts.length === 1} onClick={() => setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-md border border-red-100 bg-red-50 px-2 py-2 text-red-600 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Remove price parameter"><Trash2 className="h-3.5 w-3.5" /></button>
+        <input value={draft.notes} onChange={(event) => updateDraft(index, 'notes', event.target.value)} placeholder="Notes (optional)" className="md:col-span-4 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500" />
+        <select value={draft.status} onChange={(event) => updateDraft(index, 'status', event.target.value)} className="md:col-span-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-indigo-500"><option value="active">Active</option><option value="inactive">Inactive</option></select>
+      </div>)}</div>
+      <div className="mt-4 flex justify-end gap-2">{editingPriceId && <button type="button" onClick={() => { setEditingPriceId(null); setDrafts([emptyModelPriceDraft()]); }} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">Cancel edit</button>}<button disabled={saving} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Saving...' : editingPriceId ? 'Save price parameter' : 'Save price parameters'}</button></div>
+    </form>}
+
+    {selectedModel && <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"><div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h4 className="text-sm font-black text-slate-800">Configured Price Rows</h4><p className="mt-1 text-xs text-slate-500">{selectedModel.displayName}</p></div></div>{loadingPrices ? <div className="p-8 text-center text-xs text-slate-400">Loading price rows...</div> : prices.length === 0 ? <div className="p-8 text-center text-xs text-slate-400">No price parameters configured for this model.</div> : <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Parameter</th><th className="px-4 py-3">Price</th><th className="px-4 py-3">Effective</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Notes</th><th className="px-4 py-3 text-right">Actions</th></tr></thead><tbody>{prices.map((row) => <tr key={row.id} className="border-t border-slate-100"><td className="px-4 py-3 font-bold text-slate-700">{row.parameterName}</td><td className="px-4 py-3 text-slate-600">{row.currency} {row.price} <span className="text-slate-400">/ {row.unitQuantity.toLocaleString()} {row.unitName}</span></td><td className="px-4 py-3 text-slate-600">{row.effectiveDate.slice(0, 10)}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${row.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{row.status}</span></td><td className="max-w-[180px] truncate px-4 py-3 text-slate-500" title={row.notes ?? ''}>{row.notes ?? '—'}</td><td className="px-4 py-3"><div className="flex justify-end gap-2"><button type="button" onClick={() => editPrice(row)} className="font-bold text-indigo-700 hover:text-indigo-900">Edit</button><button type="button" onClick={() => void togglePriceStatus(row)} className="font-bold text-slate-600 hover:text-slate-900">{row.status === 'active' ? 'Deactivate' : 'Activate'}</button><button type="button" onClick={() => void showHistory(row)} className="font-bold text-slate-600 hover:text-slate-900">History</button></div></td></tr>)}</tbody></table></div>}</div>}
+
+    {history && <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/50 p-4"><div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-start justify-between"><div><h4 className="text-sm font-black text-slate-800">Price History</h4><p className="mt-1 text-xs text-slate-500">{history.parameterName}</p></div><button type="button" onClick={() => setHistory(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button></div><div className="space-y-2">{history.rows.map((row) => <div key={row.id} className="rounded-lg border border-slate-200 p-3 text-xs"><div className="flex items-center justify-between gap-3"><span className="font-bold text-slate-700">{row.currency} {row.price} / {row.unitQuantity.toLocaleString()} {row.unitName}</span><span className="text-slate-500">Effective {row.effectiveDate.slice(0, 10)}</span></div><div className="mt-1 text-[10px] text-slate-400">{row.status} · Updated {new Date(row.updatedAt).toLocaleString()}</div></div>)}</div></div></div>}
+  </div>;
+}
+
 function VoiceProvidersView() {
+  const [providerSubTab, setProviderSubTab] = useState<'providers' | 'pricing'>('providers');
   const [providers, setProviders] = useState<ProviderApiData[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'llm' | 'tts' | 'stt'>('tts');
+  const [type, setType] = useState<ProviderType>('tts');
+  const [runtimeConnectionTypes, setRuntimeConnectionTypes] = useState<RuntimeConnectionTypes>(EMPTY_RUNTIME_CONNECTION_TYPES);
+  const [runtimeConnectionType, setRuntimeConnectionType] = useState('');
   const [status, setStatus] = useState<'connected' | 'disconnected' | 'error'>('connected');
   const [parameters, setParameters] = useState<Array<{ key: string; value: string }>>([]);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -1558,6 +1730,7 @@ function VoiceProvidersView() {
   const [editStatus, setEditStatus] = useState<'connected' | 'disconnected' | 'error'>('disconnected');
   const [editBaseUrl, setEditBaseUrl] = useState('');
   const [editLatencyMs, setEditLatencyMs] = useState('');
+  const [editRuntimeConnectionType, setEditRuntimeConnectionType] = useState('');
   const [editParameters, setEditParameters] = useState<Array<{
     originalKey?: string; key: string; value: string; isSecret: boolean;
   }>>([]);
@@ -1566,6 +1739,9 @@ function VoiceProvidersView() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelKey, setModelKey] = useState('');
   const [modelDisplayName, setModelDisplayName] = useState('');
+  const [modelVoiceId, setModelVoiceId] = useState('');
+  const [modelLanguage, setModelLanguage] = useState('');
+  const [modelCapabilities, setModelCapabilities] = useState('{}');
   const [modelParameters, setModelParameters] = useState<Array<{ key: string; value: string }>>([]);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [providerActionMenu, setProviderActionMenu] = useState<{
@@ -1577,13 +1753,25 @@ function VoiceProvidersView() {
   const loadProviders = async () => {
     setLoading(true); setError('');
     try {
-      setProviders(await apiRequest<ProviderApiData[]>('/admin/providers'));
+      const [providerData, runtimeConnectionData] = await Promise.all([
+        apiRequest<ProviderApiData[]>('/admin/providers'),
+        apiRequest<RuntimeConnectionTypes>('/admin/providers/runtime-connection-types'),
+      ]);
+      setProviders(providerData);
+      setRuntimeConnectionTypes(runtimeConnectionData);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Providers could not be loaded');
     } finally { setLoading(false); }
   };
 
   useEffect(() => { void loadProviders(); }, []);
+
+  useEffect(() => {
+    const options = runtimeConnectionTypes[type];
+    if (options.length && !options.some((option) => option.value === runtimeConnectionType)) {
+      setRuntimeConnectionType(options[0].value);
+    }
+  }, [runtimeConnectionType, runtimeConnectionTypes, type]);
 
   useEffect(() => {
     if (!showAddForm) return;
@@ -1630,13 +1818,13 @@ function VoiceProvidersView() {
       const created = await apiRequest<ProviderApiData>('/admin/providers', {
         method: 'POST',
         body: JSON.stringify({
-          name: name.trim(), type, status,
+          name: name.trim(), type, runtimeConnectionType, status,
           parameters: finalParameters.map((parameter) => ({ ...parameter, isSecret: false })),
         }),
       });
       setProviders((current) => [created, ...current]);
       setSuccessMsg(`Provider "${name}" successfully configured.`);
-      setName(''); setType('tts'); setStatus('connected'); setParameters([]);
+      setName(''); setType('tts'); setRuntimeConnectionType(runtimeConnectionTypes.tts[0]?.value ?? ''); setStatus('connected'); setParameters([]);
       window.setTimeout(() => { setSuccessMsg(null); setShowAddForm(false); }, 1500);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Provider could not be created');
@@ -1649,6 +1837,7 @@ function VoiceProvidersView() {
     setEditStatus(provider.status);
     setEditBaseUrl(provider.baseUrl ?? '');
     setEditLatencyMs(provider.latencyMs?.toString() ?? '');
+    setEditRuntimeConnectionType(provider.runtimeConnectionType ?? runtimeConnectionTypes[provider.type][0]?.value ?? '');
     setEditParameters(provider.parameterKeys.map((parameter) => ({
       originalKey: parameter.key, key: parameter.key, value: parameter.value, isSecret: false,
     })));
@@ -1666,6 +1855,7 @@ function VoiceProvidersView() {
           name: editName.trim(), status: editStatus,
           baseUrl: editBaseUrl.trim() || null,
           latencyMs: editLatencyMs === '' ? null : Number(editLatencyMs),
+          runtimeConnectionType: editRuntimeConnectionType,
           parameters: editParameters.map((parameter) => ({
             originalKey: parameter.originalKey,
             key: parameter.key.trim(),
@@ -1694,7 +1884,7 @@ function VoiceProvidersView() {
 
   const openModelManager = async (provider: ProviderApiData) => {
     setModelProvider(provider); setProviderModels([]); setModelsLoading(true); setError('');
-    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelVoiceId(''); setModelLanguage(''); setModelCapabilities('{}'); setModelParameters([]);
     try {
       setProviderModels(await apiRequest<ProviderModelApiData[]>(`/admin/providers/${provider.id}/models`));
     } catch (requestError) {
@@ -1714,12 +1904,26 @@ function VoiceProvidersView() {
     setSubmitting(true); setError('');
     try {
       const settings = Object.fromEntries(modelParameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), modelParameterValue(parameter.value)]));
+      let capabilities: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(modelCapabilities || '{}');
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error();
+        capabilities = parsed;
+      } catch {
+        setError('Capabilities must be a valid JSON object.');
+        setSubmitting(false);
+        return;
+      }
       const existingModel = editingModelId ? providerModels.find((model) => model.id === editingModelId) : null;
       const saved = await apiRequest<ProviderModelApiData>(editingModelId
         ? `/admin/providers/models/${editingModelId}`
         : `/admin/providers/${modelProvider.id}/models`, {
         method: editingModelId ? 'PATCH' : 'POST',
-        body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: existingModel?.capabilities ?? {}, settings }),
+        body: JSON.stringify({
+          modelKey: modelKey.trim(), displayName: modelDisplayName.trim(),
+          voiceId: modelVoiceId.trim() || undefined, language: modelLanguage.trim() || undefined,
+          status: 'active', capabilities, settings,
+        }),
       });
       if (editingModelId) {
         setProviderModels((current) => current.map((model) => model.id === saved.id ? saved : model));
@@ -1728,7 +1932,7 @@ function VoiceProvidersView() {
         setProviders((current) => current.map((provider) => provider.id === modelProvider.id ? { ...provider, modelCount: provider.modelCount + 1 } : provider));
         setModelProvider((current) => current ? { ...current, modelCount: current.modelCount + 1 } : current);
       }
-      setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+      setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelVoiceId(''); setModelLanguage(''); setModelCapabilities('{}'); setModelParameters([]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Provider model could not be created');
     } finally { setSubmitting(false); }
@@ -1738,6 +1942,9 @@ function VoiceProvidersView() {
     setEditingModelId(model.id);
     setModelKey(model.modelKey);
     setModelDisplayName(model.displayName);
+    setModelVoiceId(typeof model.settings.voiceId === 'string' ? model.settings.voiceId : '');
+    setModelLanguage(typeof model.settings.language === 'string' ? model.settings.language : '');
+    setModelCapabilities(JSON.stringify(model.capabilities, null, 2));
     setModelParameters(Object.entries(model.settings).map(([key, value]) => ({
       key,
       value: typeof value === 'string' ? value : JSON.stringify(value),
@@ -1746,7 +1953,7 @@ function VoiceProvidersView() {
   };
 
   const cancelModelEditor = () => {
-    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelVoiceId(''); setModelLanguage(''); setModelCapabilities('{}'); setModelParameters([]);
   };
 
   const toggleModelStatus = async (model: ProviderModelApiData) => {
@@ -1767,15 +1974,19 @@ function VoiceProvidersView() {
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-800 tracking-tight">AI Providers</h2>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">Configure LLM, text-to-speech, and speech-to-text providers.</p>
+          <p className="text-xs text-slate-400 font-medium mt-0.5">Configure LLM, STT, TTS, and audio-to-audio providers.</p>
+          <div className="mt-3 inline-flex rounded-lg bg-slate-100 p-1">
+            <button type="button" onClick={() => setProviderSubTab('providers')} className={`rounded-md px-3 py-1.5 text-[10px] font-black transition ${providerSubTab === 'providers' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>Providers</button>
+            <button type="button" onClick={() => setProviderSubTab('pricing')} className={`rounded-md px-3 py-1.5 text-[10px] font-black transition ${providerSubTab === 'pricing' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>Model Price Assignment</button>
+          </div>
         </div>
-        <button
+        {providerSubTab === 'providers' && <button
           onClick={() => setShowAddForm(!showAddForm)}
           className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2.5 text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer shadow-sm shadow-indigo-100"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Add Provider</span>
-        </button>
+        </button>}
       </div>
 
       {error && (
@@ -1783,6 +1994,8 @@ function VoiceProvidersView() {
           {error}
         </div>
       )}
+
+      {providerSubTab === 'pricing' ? <ModelPriceAssignmentPanel providers={providers} /> : <>
 
       {/* NEW PROVIDER PROVISIONING CARD */}
       {showAddForm && (
@@ -1825,7 +2038,7 @@ function VoiceProvidersView() {
             {/* Step 1: Basic Details */}
             <div>
               <h4 className="text-[10px] font-black text-indigo-600 uppercase tracking-wider mb-2.5">1. Provider Profile Details</h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] text-slate-500 mb-1 font-bold">Provider Name</label>
                   <input
@@ -1841,13 +2054,35 @@ function VoiceProvidersView() {
                   <label className="block text-[10px] text-slate-500 mb-1 font-bold">Provider Type</label>
                   <select
                     value={type}
-                    onChange={(e) => setType(e.target.value as any)}
+                    onChange={(e) => setType(e.target.value as ProviderType)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer font-bold"
                   >
                     <option value="tts">Text-to-Speech (TTS)</option>
                     <option value="stt">Speech-to-Text (STT)</option>
                     <option value="llm">AI Large Language Model (LLM)</option>
+                    <option value="audio_to_audio">Audio-to-Audio</option>
+                    <option value="telephony">Telephony / Plivo</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-1 font-bold">Runtime Connection Type</label>
+                  <select
+                    required
+                    value={runtimeConnectionType}
+                    disabled={runtimeConnectionTypes[type].length === 0}
+                    onChange={(e) => setRuntimeConnectionType(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer font-bold disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {runtimeConnectionTypes[type].length === 0 && <option value="">Loading supported adapters...</option>}
+                    {runtimeConnectionTypes[type].map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}{option.availability === 'adapter_required' ? ' — adapter required' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {runtimeConnectionType && runtimeConnectionTypes[type].find((option) => option.value === runtimeConnectionType)?.availability === 'adapter_required' && (
+                    <p className="mt-1 text-[10px] font-medium text-amber-700">This selection is saved for setup, but needs its runtime adapter before it can be used in a live call.</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[10px] text-slate-500 mb-1 font-bold">Initial Connection State</label>
@@ -1965,6 +2200,19 @@ function VoiceProvidersView() {
                 </select>
               </div>
               <div>
+                <label className="mb-1 block text-[10px] font-bold text-slate-500">Runtime Connection Type</label>
+                <select required value={editRuntimeConnectionType} onChange={(e) => setEditRuntimeConnectionType(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none">
+                  {runtimeConnectionTypes[editingProvider.type].map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}{option.availability === 'adapter_required' ? ' — adapter required' : ''}
+                    </option>
+                  ))}
+                </select>
+                {runtimeConnectionTypes[editingProvider.type].find((option) => option.value === editRuntimeConnectionType)?.availability === 'adapter_required' && (
+                  <p className="mt-1 text-[10px] font-medium text-amber-700">This connection type is configuration-only until its runtime adapter is added.</p>
+                )}
+              </div>
+              <div>
                 <label className="mb-1 block text-[10px] font-bold text-slate-500">Base URL</label>
                 <input type="url" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://api.provider.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
               </div>
@@ -2007,16 +2255,29 @@ function VoiceProvidersView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="mb-5 flex items-start justify-between border-b border-slate-100 pb-4">
-              <div><h3 className="text-sm font-black text-slate-800">Manage {modelProvider.type.toUpperCase()} Models</h3><p className="mt-1 text-[10px] font-semibold text-slate-400">{modelProvider.name} — developers can only select active models and view these parameters.</p></div>
+              <div>
+                <h3 className="text-sm font-black text-slate-800">Manage {modelProvider.type.toUpperCase()} Models</h3>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">{modelProvider.name} — {modelProvider.runtimeConnection?.label ?? 'Runtime type not set'}.</p>
+                <span className={`mt-2 inline-block rounded border px-2 py-1 text-[9px] font-bold uppercase ${
+                  modelProvider.status === 'connected' && modelProvider.runtimeConnection?.availability === 'supported'
+                    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                }`}>
+                  {modelProvider.status === 'connected' && modelProvider.runtimeConnection?.availability === 'supported' ? 'Runtime Supported' : 'Configuration Only'}
+                </span>
+              </div>
               <button type="button" onClick={() => setModelProvider(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
             {error && <div className="mb-4 rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
             <form onSubmit={handleCreateModel} className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">
-              <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-700">{editingModelId ? 'Edit Super Admin Model' : 'Create Super Admin Model'}</h4><p className="text-[10px] text-slate-400">Models are explicit and dynamic. Provider credentials remain private; developers can select active models and view only these model settings.</p></div>
+              <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-700">{editingModelId ? 'Edit Super Admin Model' : 'Create Super Admin Model'}</h4><p className="text-[10px] text-slate-400">This model is bound to the selected provider adapter. Only Runtime Supported models can be selected by live agents.</p></div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="text-[10px] font-bold text-slate-500">Model Key<input required value={modelKey} onChange={(e) => setModelKey(e.target.value)} placeholder="e.g. gpt-4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500" /></label>
                 <label className="text-[10px] font-bold text-slate-500">Display Name<input required value={modelDisplayName} onChange={(e) => setModelDisplayName(e.target.value)} placeholder="e.g. GPT 4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-500" /></label>
+                <label className="text-[10px] font-bold text-slate-500">Voice ID <span className="font-medium text-slate-400">optional</span><input value={modelVoiceId} onChange={(e) => setModelVoiceId(e.target.value)} placeholder="e.g. voice-123" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500" /></label>
+                <label className="text-[10px] font-bold text-slate-500">Language <span className="font-medium text-slate-400">optional</span><input value={modelLanguage} onChange={(e) => setModelLanguage(e.target.value)} placeholder="e.g. ta-IN" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500" /></label>
               </div>
+              <label className="block text-[10px] font-bold text-slate-500">Capabilities <span className="font-medium text-slate-400">JSON</span><textarea value={modelCapabilities} onChange={(e) => setModelCapabilities(e.target.value)} rows={4} spellCheck={false} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-[10px] outline-none focus:border-indigo-500" /></label>
               <div className="space-y-2">
                 <div className="flex items-center justify-between"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Model Parameters</span><button type="button" onClick={() => setModelParameters((current) => [...current, { key: '', value: '' }])} className="rounded-lg border border-indigo-100 bg-white px-2.5 py-1.5 text-[10px] font-bold text-indigo-700"><Plus className="mr-1 inline h-3 w-3" />Add Parameter</button></div>
                 {modelParameters.map((parameter, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
@@ -2028,14 +2289,14 @@ function VoiceProvidersView() {
               </div>
               <div className="flex justify-end gap-2">
                 {editingModelId && <button type="button" onClick={cancelModelEditor} className="rounded-lg bg-white px-4 py-2 text-xs font-bold text-slate-600 ring-1 ring-slate-200">Cancel Edit</button>}
-                <button disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : editingModelId ? 'Save Model' : 'Add Active Model'}</button>
+                <button disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : editingModelId ? 'Save Model' : modelProvider.status === 'connected' && modelProvider.runtimeConnection?.availability === 'supported' ? 'Add Runtime Supported Model' : 'Add Configuration-Only Model'}</button>
               </div>
             </form>
             <div className="mt-5 space-y-2">
               <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Created Models ({providerModels.length})</span>
               {modelsLoading && <div className="rounded-xl border border-slate-200 p-6 text-center text-xs text-slate-400">Loading models...</div>}
               {!modelsLoading && providerModels.map((model) => <div key={model.id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 p-4">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-slate-800">{model.displayName}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">{model.modelKey}</span></div><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(model.settings).map(([key, value]) => <span key={key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[9px] text-slate-600">{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</span>)}{Object.keys(model.settings).length === 0 && <span className="text-[9px] text-slate-400">No model parameters</span>}</div></div>
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-slate-800">{model.displayName}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">{model.modelKey}</span><span className={`rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase ${model.runtimeStatus === 'runtime_supported' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{model.runtimeStatus === 'runtime_supported' ? 'Runtime Supported' : 'Configuration Only'}</span></div><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(model.settings).map(([key, value]) => <span key={key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[9px] text-slate-600">{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</span>)}{Object.keys(model.settings).length === 0 && <span className="text-[9px] text-slate-400">No model parameters</span>}</div></div>
                 <div className="flex shrink-0 gap-2">
                   <button type="button" onClick={() => openModelEditor(model)} className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-[10px] font-bold text-indigo-700">Edit</button>
                   <button type="button" onClick={() => toggleModelStatus(model)} className={`rounded-lg border px-3 py-1.5 text-[10px] font-bold ${model.status === 'active' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>{model.status === 'active' ? 'Active' : 'Inactive'}</button>
@@ -2058,6 +2319,13 @@ function VoiceProvidersView() {
                   <h4 className="font-bold text-slate-800 text-sm tracking-tight">{p.name}</h4>
                   <span className="bg-slate-100 text-slate-600 text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-200 uppercase mt-1.5 inline-block">
                     {p.type}
+                  </span>
+                  <span className={`ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase mt-1.5 inline-block ${
+                    p.runtimeConnection?.availability === 'adapter_required'
+                      ? 'border-amber-200 bg-amber-50 text-amber-700'
+                      : 'border-indigo-100 bg-indigo-50 text-indigo-700'
+                  }`}>
+                    {p.runtimeConnection?.label ?? 'Runtime type not set'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2204,6 +2472,7 @@ function VoiceProvidersView() {
         </>,
         document.body,
       )}
+      </>}
     </div>
   );
 }

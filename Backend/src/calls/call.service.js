@@ -5,6 +5,7 @@ import { decryptCredential } from '../security/credential-crypto.js';
 import { hangupPlivoCall } from '../telephony/plivo.client.js';
 import { mergeMessageSources } from '../voice/source-trace.js';
 import { normalizeTtsLimitUsage } from '../voice/tts-limit-usage.js';
+import { getCallCostReport } from './call-cost-report.service.js';
 
 const activeStatuses = ['queued', 'ringing', 'connected'];
 const number = (value) => Number(value);
@@ -138,7 +139,11 @@ export function getCall(auth, callId, dependencies = {}) {
       WHERE call_session_id = $1 AND tenant_id = $2
       ORDER BY sequence_number`, [callId, result.rows[0].tenant_id]);
     const includeDeveloperMetadata = ['SUPER_ADMIN', 'COMPANY_DEVELOPER'].includes(auth.role);
-    return mapCall({ ...result.rows[0], transcript: transcript.rows }, true, includeDeveloperMetadata);
+    const call = result.rows[0];
+    return {
+      ...mapCall({ ...call, transcript: transcript.rows }, true, includeDeveloperMetadata),
+      costReport: await getCallCostReport(client, call),
+    };
   });
 }
 

@@ -106,6 +106,8 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
             inputTokens: usage.inputTokens,
             outputTokens: payload.usage?.output_tokens,
             cachedInputTokens: payload.usage?.cache_read_input_tokens,
+            audioInputTokens: payload.usage?.audio_input_tokens,
+            audioOutputTokens: payload.usage?.audio_output_tokens,
           });
           yield normalizeLlmEvent({ type: 'usage', usage, providerRequestId }, context);
         }

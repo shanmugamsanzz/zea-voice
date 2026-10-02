@@ -15,6 +15,8 @@ export function normalizeLlmUsage(usage = {}) {
     outputTokens,
     totalTokens: Number(usage.totalTokens) || inputTokens + outputTokens,
     cachedInputTokens: Number(usage.cachedInputTokens ?? 0) || 0,
+    audioInputTokens: Number(usage.audioInputTokens ?? usage.audio_input_tokens ?? 0) || 0,
+    audioOutputTokens: Number(usage.audioOutputTokens ?? usage.audio_output_tokens ?? 0) || 0,
   });
 }
 

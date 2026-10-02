@@ -5,7 +5,7 @@ import { resolvePhoneNumberAgent } from './agent-resolver.service.js';
 import { createVoiceCallSession, saveVoiceCallContextResolution, saveVoiceCallPreCallResult } from './call-session-store.js';
 import { plivoAnswerPayloadSchema } from './voice.schemas.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
-import { assertRuntimeAdapterCompatibility } from './providers/registry.js';
+import { validateRuntimeAdapterConfiguration } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
 import { executePreCall } from './integrations/precall.service.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
@@ -68,7 +68,7 @@ voiceRouter.post('/answer', async (request, response) => {
     toolTypes: [...new Set(runtimeProfile.tools.map((tool) => tool.type))],
   }, 'Active tenant-isolated tools loaded for the selected agent');
   registerImplementedProviderAdapters();
-  const adapterCompatibility = assertRuntimeAdapterCompatibility(runtimeProfile);
+  const adapterCompatibility = await validateRuntimeAdapterConfiguration(runtimeProfile);
   request.log.info({
     icon: '📝', stage: 'prompt.loaded', providerCallId: call.providerCallId,
     agentId: runtimeAgent.agentId, promptCharacters: runtimeProfile.agent.prompt?.length ?? 0,

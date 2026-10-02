@@ -5,9 +5,39 @@ import { reportPostCall } from './integrations/postcall.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
 import { normalizeTtsLimitUsage } from './tts-limit-usage.js';
 import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
+import { calculateAndPersistUsageEventCosts } from '../credits/usage-price-calculation.service.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
+
+async function persistTelephonyUsage(client, call, durationSeconds, endedAt) {
+  if (!call.telephony_account_id) return null;
+  const provider = await client.query(`SELECT p.id AS provider_id,p.name AS provider_name,
+      m.id AS model_id,m.model_key
+    FROM telephony_accounts account
+    JOIN ai_providers p ON p.type='telephony' AND p.status='connected' AND p.deleted_at IS NULL
+      AND lower(p.slug)=lower(account.provider)
+    JOIN provider_models m ON m.provider_id=p.id AND m.status='active' AND m.deleted_at IS NULL
+    WHERE account.id=$1 ORDER BY m.created_at ASC LIMIT 1`, [call.telephony_account_id]);
+  if (!provider.rowCount) return null;
+  const selected = provider.rows[0];
+  const inserted = await client.query(`INSERT INTO call_metered_usage_events
+    (call_session_id,tenant_id,service_type,provider_id,provider_name,model_id,model_key,
+     model_call_count,duration_ms,request_count,raw_usage,occurred_at)
+    VALUES($1,$2,'telephony',$3,$4,$5,$6,1,$7,1,$8::jsonb,$9::timestamptz)
+    RETURNING id`, [
+    call.id, call.tenant_id, selected.provider_id, selected.provider_name, selected.model_id, selected.model_key,
+    wholeNumber(durationSeconds * 1000), JSON.stringify({ direction: call.direction, source: 'call_session_duration' }),
+    endedAt.toISOString(),
+  ]);
+  if (!inserted.rowCount) return null;
+  await calculateAndPersistUsageEventCosts(client, {
+    id: inserted.rows[0].id, callSessionId: call.id, tenantId: call.tenant_id,
+    serviceType: 'telephony', providerId: selected.provider_id, modelId: selected.model_id,
+    durationMs: durationSeconds * 1000, requests: 1, direction: call.direction, occurredAt: endedAt.toISOString(),
+  });
+  return selected;
+}
 
 function terminalStatus(outcome) {
   return terminalStatuses.has(outcome) ? outcome : 'failed';
@@ -63,7 +93,34 @@ async function persistCompletion(input, dependencies) {
         wholeNumber(usage.audioOutputMs), wholeNumber(usage.characters), wholeNumber(usage.durationMs),
         usage.cost, usage.currency, JSON.stringify(usage.events),
       ]);
+      for (const event of usage.events ?? []) {
+        const inserted = await client.query(`INSERT INTO call_metered_usage_events
+          (call_session_id,tenant_id,service_type,provider_id,provider_name,model_id,model_key,
+           model_call_count,input_tokens,output_tokens,cached_input_tokens,audio_input_tokens,audio_output_tokens,
+           audio_input_ms,audio_output_ms,character_count,duration_ms,request_count,raw_usage,occurred_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::timestamptz)
+          RETURNING id`, [
+          input.callId, call.tenant_id, usage.kind, usage.providerId, usage.providerName, usage.modelId, usage.model,
+          1, wholeNumber(event.inputTokens), wholeNumber(event.outputTokens), wholeNumber(event.cachedInputTokens),
+          wholeNumber(event.audioInputTokens), wholeNumber(event.audioOutputTokens), wholeNumber(event.audioInputMs),
+          wholeNumber(event.audioOutputMs), wholeNumber(event.characters), wholeNumber(event.durationMs),
+          wholeNumber(event.requests ?? 1), JSON.stringify(event.raw ?? event), event.occurredAt ?? endedAt.toISOString(),
+        ]);
+        if (inserted.rowCount) {
+          await calculateAndPersistUsageEventCosts(client, {
+            id: inserted.rows[0].id, callSessionId: input.callId, tenantId: call.tenant_id,
+            serviceType: usage.kind, providerId: usage.providerId, modelId: usage.modelId,
+            inputTokens: event.inputTokens, outputTokens: event.outputTokens,
+            cachedInputTokens: event.cachedInputTokens, audioInputTokens: event.audioInputTokens,
+            audioOutputTokens: event.audioOutputTokens, audioInputMs: event.audioInputMs,
+            audioOutputMs: event.audioOutputMs, characters: event.characters,
+            durationMs: event.durationMs, requests: event.requests ?? 1,
+            occurredAt: event.occurredAt ?? endedAt.toISOString(),
+          });
+        }
+      }
     }
+    await persistTelephonyUsage(client, call, durationSeconds, endedAt);
     const voiceRuntime = {
       finalized: true,
       reason: input.reason,
