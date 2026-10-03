@@ -20,7 +20,7 @@ export async function persistTelephonyUsage(client, call, durationSeconds, ended
   // resolve them through its own transaction. Keep the privileged read narrow.
   const providerContext = dependencies.providerContext ?? withPlatformAdminContext;
   const provider = await providerContext(null, (providerClient) => providerClient.query(`SELECT p.id AS provider_id,p.name AS provider_name,
-      m.id AS model_id,m.model_key
+      m.id AS model_id,m.model_key,account.provider AS telephony_provider
     FROM telephony_accounts account
     JOIN ai_providers p ON p.type='telephony' AND p.status='connected' AND p.deleted_at IS NULL
       AND (lower(p.runtime_connection_type)=lower(account.provider)
@@ -34,20 +34,28 @@ export async function persistTelephonyUsage(client, call, durationSeconds, ended
     return null;
   }
   const selected = provider.rows[0];
+  // India Plivo calls use 30-second pulses. Preserve actual duration for reports,
+  // while charging the rounded billable quantity.
+  const billingIncrementMs = selected.telephony_provider === 'plivo' ? 30_000 : 0;
   const inserted = await client.query(`INSERT INTO call_metered_usage_events
     (call_session_id,tenant_id,service_type,provider_id,provider_name,model_id,model_key,
      model_call_count,duration_ms,request_count,raw_usage,occurred_at)
     VALUES($1,$2,'telephony',$3,$4,$5,$6,1,$7,1,$8::jsonb,$9::timestamptz)
     RETURNING id`, [
     call.id, call.tenant_id, selected.provider_id, selected.provider_name, selected.model_id, selected.model_key,
-    wholeNumber(durationSeconds * 1000), JSON.stringify({ direction: call.direction, source: 'call_session_duration' }),
+    wholeNumber(durationSeconds * 1000), JSON.stringify({ direction: call.direction,
+      source: 'call_session_duration', billingIncrementMs,
+      billableDurationMs: billingIncrementMs
+        ? Math.ceil(durationSeconds * 1000 / billingIncrementMs) * billingIncrementMs
+        : durationSeconds * 1000 }),
     endedAt.toISOString(),
   ]);
   if (!inserted.rowCount) return null;
   await calculateAndPersistUsageEventCosts(client, {
     id: inserted.rows[0].id, callSessionId: call.id, tenantId: call.tenant_id,
     serviceType: 'telephony', providerId: selected.provider_id, modelId: selected.model_id,
-    durationMs: durationSeconds * 1000, requests: 1, direction: call.direction, occurredAt: endedAt.toISOString(),
+    durationMs: durationSeconds * 1000, billingIncrementMs,
+    requests: 1, direction: call.direction, occurredAt: endedAt.toISOString(),
   });
   return selected;
 }

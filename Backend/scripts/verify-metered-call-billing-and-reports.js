@@ -16,7 +16,8 @@ await persistTelephonyUsage({ query: async (sql, values) => {
     throw new Error('Runtime transaction cannot read admin-only telephony accounts');
   }
   if (sql.includes('INSERT INTO call_metered_usage_events')) {
-    assert.equal(values[6], 120000);
+    assert.equal(values[6], 282000);
+    assert.equal(JSON.parse(values[7]).billableDurationMs, 300000);
     return { rowCount: 1, rows: [{ id: 'telephony-event' }] };
   }
   if (sql.includes('FROM provider_model_prices')) return { rows: [{ id: 'voice-price',
@@ -28,18 +29,18 @@ await persistTelephonyUsage({ query: async (sql, values) => {
   }
   throw new Error(`Unexpected query: ${sql}`);
 } }, { id: 'phone-call', tenant_id: 'tenant', telephony_account_id: 'account', direction: 'inbound' },
-120, new Date('2026-10-02T10:00:00Z'), {
+282, new Date('2026-10-02T10:00:00Z'), {
   providerContext: async (actor, operation) => {
     assert.equal(actor, null);
     return operation({ query: async (sql, values) => {
       assert.ok(sql.includes('lower(p.runtime_connection_type)=lower(account.provider)'));
       assert.deepEqual(values, ['account']);
       return { rowCount: 1, rows: [{ provider_id: 'pricing-provider', provider_name: 'Plivo Telephony Pricing',
-        model_id: 'voice-model', model_key: 'plivo-voice' }] };
+        model_id: 'voice-model', model_key: 'plivo-voice', telephony_provider: 'plivo' }] };
     } });
   },
 });
-assert.equal(telephonyCost, 0.76);
+assert.equal(telephonyCost, 1.90);
 await persistTelephonyUsage({ query: () => { throw new Error('Browser calls must not incur telephony usage'); } },
 { telephony_account_id: 'account', provider_metadata: { source: 'browser_test' } }, 120, new Date());
 

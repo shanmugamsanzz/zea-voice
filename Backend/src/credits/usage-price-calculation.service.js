@@ -34,7 +34,12 @@ function genericAudioDurationMs(event) {
     return Number(event.audioInputMs ?? event.audio_input_ms ?? 0)
       + Number(event.audioOutputMs ?? event.audio_output_ms ?? 0);
   }
-  return Number(event.durationMs ?? event.duration_ms ?? 0);
+  const duration = Math.max(0, Number(event.durationMs ?? event.duration_ms ?? 0) || 0);
+  const increment = Number(event.billingIncrementMs ?? 0);
+  if (event.serviceType === 'telephony' && increment > 0 && Number.isFinite(increment)) {
+    return Math.ceil(duration / increment) * increment;
+  }
+  return duration;
 }
 
 export function usageQuantityForParameter(event = {}, parameterKey) {

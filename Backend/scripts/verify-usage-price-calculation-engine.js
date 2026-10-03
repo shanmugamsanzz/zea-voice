@@ -42,6 +42,16 @@ assert.equal(calculated.lines.find((line) => line.parameterKey === 'audio_output
 assert.equal(calculated.totalInr, 522);
 
 const ttsEvent = { serviceType: 'tts', characters: 250, audioOutputMs: 90_000, requests: 1 };
+const voicePrice = { parameterName: 'Voice Minutes', currency: 'INR', unitName: 'minute', unitQuantity: 1, price: 0.38 };
+for (const [seconds, minutes] of [[0, 0], [1, 0.5], [30, 0.5], [31, 1], [282, 5], [300, 5], [301, 5.5]]) {
+  const event = { serviceType: 'telephony', durationMs: seconds * 1000, billingIncrementMs: 30000 };
+  assert.equal(usageQuantityForParameter(event, 'generic_minutes'), minutes);
+  assert.equal(calculateUsageCostLines(event, [voicePrice]).totalInr, Math.round(minutes * 0.38 * 1e8) / 1e8);
+}
+assert.equal(calculateUsageCostLines({ serviceType: 'telephony', durationMs: 282000,
+  billingIncrementMs: 30000 }, [voicePrice]).totalInr, 1.90);
+assert.equal(usageQuantityForParameter({ serviceType: 'tts', audioOutputMs: 282000,
+  billingIncrementMs: 30000 }, 'generic_minutes'), 4.7);
 assert.equal(usageQuantityForParameter(ttsEvent, 'generic_minutes'), 1.5);
 const ttsCost = calculateUsageCostLines(ttsEvent, [
   { id: 'chars', parameterName: 'Characters', currency: 'INR', unitName: '100 characters', unitQuantity: 100, price: 2 },
