@@ -75,7 +75,7 @@ assert.equal(scheduled.scheduled, true);
 assert.equal(scheduled.retryCount, 1);
 assert.equal(queueJobs.length, 1);
 assert.equal(queueJobs[0][0], 'campaign-task');
-assert.match(queueJobs[0][2].jobId, /:callback:1$/);
+assert.match(queueJobs[0][2].jobId, /-callback-1$/);
 assert.match(queries[0].sql, /c\.tenant_id=\$2/);
 assert.deepEqual(queries[0].values, ['call-1', 'tenant-1']);
 assert.match(queries[1].sql, /retry_count=\$3/);

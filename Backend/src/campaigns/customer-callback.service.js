@@ -111,7 +111,7 @@ export async function scheduleCustomerCallback(input, dependencies = {}) {
       workspaceId: scheduled.workspaceId,
       campaignId: scheduled.campaignId,
     }, {
-      jobId: `${scheduled.taskId}:callback:${scheduled.retryCount}`,
+      jobId: `${scheduled.taskId}-callback-${scheduled.retryCount}`,
       delay: Math.max(0, new Date(scheduled.requestedFor).getTime() - Date.now()),
       removeOnComplete: 1000,
       removeOnFail: 5000,

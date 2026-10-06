@@ -6,7 +6,10 @@ const billingTierSchema = z.enum(['starter', 'pro', 'enterprise']);
 
 const limitsShape = {
   maxCampaignConcurrency: z.number().int().min(1).max(20).default(20),
-  maxTotalConcurrency: z.number().int().min(1).max(10_000).default(20),
+  maxTotalConcurrency: z.number().int().min(1).max(10_000),
+  maxInboundQueueSize: z.number().int().min(1).max(10000).default(100),
+  maxInboundWaitSeconds: z.number().int().min(10).max(3600).default(180),
+  maxOutboundQueuedTasks: z.number().int().min(1).max(100000).default(10000),
   maxAgents: z.number().int().min(0).max(100_000).default(50),
   maxUsers: z.number().int().min(0).max(100_000).default(50),
   maxPhoneNumbers: z.number().int().min(0).max(100_000).default(20),
@@ -17,6 +20,11 @@ const limitsSchema = z.object(limitsShape).refine(
   (value) => value.maxCampaignConcurrency <= value.maxTotalConcurrency,
   { message: 'Campaign concurrency cannot exceed company total concurrency', path: ['maxCampaignConcurrency'] },
 );
+
+// PATCH must preserve unsupplied saved limits rather than reapplying creation
+// defaults (especially when a company has a small assigned concurrency).
+const limitsPatchShape = Object.fromEntries(Object.entries(limitsShape).map(([key, schema]) =>
+  [key, (schema instanceof z.ZodDefault ? schema.removeDefault() : schema).optional()]));
 
 export const createCompanySchema = z.object({
   businessName: z.string().trim().min(1).max(200),
@@ -38,14 +46,7 @@ export const createCompanySchema = z.object({
   status: z.enum(['pending', 'active']).default('active'),
   locale: z.string().trim().min(2).max(20).default('en-US'),
   currency: z.string().trim().length(3).transform((value) => value.toUpperCase()).default('USD'),
-  limits: limitsSchema.default({
-    maxCampaignConcurrency: 20,
-    maxTotalConcurrency: 20,
-    maxAgents: 50,
-    maxUsers: 50,
-    maxPhoneNumbers: 20,
-    maxCampaigns: 100,
-  }),
+  limits: limitsSchema,
 });
 
 export const updateCompanySchema = z.object({
@@ -67,7 +68,7 @@ export const updateCompanySchema = z.object({
   timezone: z.string().trim().min(1).max(64).optional(),
   locale: z.string().trim().min(2).max(20).optional(),
   currency: z.string().trim().length(3).transform((value) => value.toUpperCase()).optional(),
-  limits: z.object(limitsShape).partial().optional(),
+  limits: z.object(limitsPatchShape).optional(),
 }).refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' });
 
 export const companyStatusSchema = z.object({ status: statusSchema });

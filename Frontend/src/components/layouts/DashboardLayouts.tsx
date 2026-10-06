@@ -171,6 +171,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       title: 'VOICE AI',
       items: [
         { name: 'Campaigns', viewId: 'campaigns', icon: Megaphone },
+        { name: 'Call Queue', viewId: 'queue-monitor', icon: Activity },
         { name: 'Agents', viewId: 'agents', icon: Bot },
         { name: 'Reports', viewId: 'reports', icon: FileSpreadsheet },
         { name: 'VQA Voice', viewId: 'vqa-voice', icon: MessageSquare },

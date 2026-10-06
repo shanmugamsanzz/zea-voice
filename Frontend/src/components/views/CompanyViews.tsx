@@ -59,6 +59,7 @@ import { BrowserAgentTestPanel } from '../agent/BrowserAgentTestPanel';
 import { AgentLiveDataPanel } from '../agent/AgentLiveDataPanel';
 import { DeveloperReportsView } from '../reports/DeveloperReportsView';
 import { DeveloperVqaView } from '../vqa/DeveloperVqaView';
+import { CompanyQueueView } from './CompanyQueueView';
 import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
 import { DeveloperPhoneNumbersView } from '../phone-numbers/DeveloperPhoneNumbersView';
 import { DeveloperIntegrationsView } from '../integrations/DeveloperIntegrationsView';
@@ -128,6 +129,8 @@ export function CompanyViews() {
       return <CompanyAnalytics />;
     case 'campaigns':
       return <CampaignsListView campaigns={campaigns} setCampaigns={setCampaigns} />;
+    case 'queue-monitor':
+      return <CompanyQueueView />;
     case 'agents':
       return <AgentsListView agents={agents} setAgents={setAgents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
     case 'agents/create':
@@ -1363,13 +1366,13 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                   </div>
 
                   {/* Resume All button */}
-                  <button
+                  {!isReadOnly && <button
                     onClick={handleResumeAll}
                     className="bg-white border border-slate-200 hover:border-slate-300 px-4 py-2.5 rounded-xl text-xs font-black text-slate-700 hover:bg-slate-50 transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
                   >
                     <Play className="w-3.5 h-3.5 text-slate-500 fill-slate-500" />
                     <span>Resume All</span>
-                  </button>
+                  </button>}
 
                 </div>
               </div>
@@ -1444,12 +1447,12 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                         <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                           <span className="text-[10px] text-slate-400 font-mono">{c.scheduleStart}</span>
                           <div className="flex space-x-1.5">
-                            <button
+                            {!isReadOnly && <button
                               onClick={() => toggleCampaignStatus(c.id)}
                               className="p-1.5 bg-slate-50 hover:bg-amber-50 text-slate-600 hover:text-amber-600 border border-slate-200 rounded-lg transition cursor-pointer"
                             >
                               {c.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                            </button>
+                            </button>}
                             {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-600 border border-slate-200 rounded-lg transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
                           </div>
                         </div>
@@ -1508,10 +1511,10 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                                 <TableActionsMenu
                                   ariaLabel={`Actions for ${c.name}`}
                                   actions={[
-                                    {
+                                    ...(!isReadOnly ? [{
                                       label: c.status === 'running' ? 'Pause' : 'Resume',
                                       onClick: () => toggleCampaignStatus(c.id),
-                                    },
+                                    }] : []),
                                     ...(!isReadOnly ? [{
                                       label: 'Delete',
                                       onClick: () => void deleteCampaign(c.id),
@@ -1614,10 +1617,10 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                         <TableActionsMenu
                           ariaLabel={`Actions for ${rt.name}`}
                           actions={[
-                            {
+                            ...(!isReadOnly ? [{
                               label: rt.status === 'running' ? 'Pause Listener' : 'Resume Listener',
                               onClick: () => toggleRealtimeStatus(rt.id),
-                            },
+                            }] : []),
                             ...(!isReadOnly ? [{
                               label: 'Deactivate & Delete',
                               onClick: () => void deleteRealtimeCampaign(rt.id),

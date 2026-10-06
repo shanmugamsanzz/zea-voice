@@ -48,6 +48,7 @@ import {
 import { CallVolumeChart, OutcomePieChart } from '../charts/DashboardCharts';
 import { CreditsManagerView } from './CreditsManagerView';
 import { QueueMonitorView } from './QueueMonitorView';
+import { CompanyQueueLimitFields, CompanyQueueLimits } from '../common/CompanyQueueLimitFields';
 import { CallMonitoringView } from './CallMonitoringView';
 import { PaymentsView } from './PaymentsView';
 import { GlobalSettingsView } from './GlobalSettingsView';
@@ -65,6 +66,7 @@ interface PlatformDashboardData {
 }
 
 interface CompanyApiData {
+  limits: CompanyQueueLimits & { maxTotalConcurrency: number; maxCampaignConcurrency: number };
   tenantId: string; organizationId: string; workspaceId: string; businessName: string;
   organizationName: string; workspaceName: string;
   legalName: string | null; firstName: string | null; lastName: string | null; email: string;
@@ -432,6 +434,8 @@ function CompaniesListView() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [businessName, setBusinessName] = useState('');
+  const [liveCallConcurrency, setLiveCallConcurrency] = useState('');
+  const [queueLimits, setQueueLimits] = useState<CompanyQueueLimits>({ maxInboundQueueSize: 100, maxInboundWaitSeconds: 180, maxOutboundQueuedTasks: 10000 });
   const [organizationName, setOrganizationName] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
   const [businessPhone, setBusinessPhone] = useState('');
@@ -462,11 +466,16 @@ function CompaniesListView() {
   const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!businessName || !organizationName || !workspaceName || !email) return;
+    const concurrency = Number(liveCallConcurrency);
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10000) {
+      setError('Enter a live-call concurrency limit from 1 to 10,000.'); return;
+    }
     setSubmitting(true); setError('');
     try {
       await apiRequest<CompanyApiData>('/admin/companies', { method: 'POST', body: JSON.stringify({
         businessName, organizationName, workspaceName, legalName: organizationName, firstName, lastName, email, businessPhone,
         website, billingTier, addressLine1: address, state, country, postalCode: zip,
+        limits: { ...queueLimits, maxTotalConcurrency: concurrency, maxCampaignConcurrency: Math.min(concurrency, 20) },
         timezone, status: 'active', locale: 'en-US', currency: 'INR',
       }) });
       setSuccessMessage(`Organization "${businessName}" successfully created.`);
@@ -514,6 +523,7 @@ function CompaniesListView() {
           addressLine1: editingCompany.addressLine1, addressLine2: editingCompany.addressLine2,
           state: editingCompany.state, country: editingCompany.country,
           postalCode: editingCompany.postalCode, timezone: editingCompany.timezone,
+          limits: editingCompany.limits,
         }),
       });
       setEditingCompany(null);
@@ -706,6 +716,13 @@ function CompaniesListView() {
               <button type="button" onClick={() => setEditingCompany(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
+              <label className="font-bold text-slate-500">Live Phone Call Concurrency<input type="number" required min={1} max={10000} step={1} value={editingCompany.limits.maxTotalConcurrency || ''}
+                onChange={event => setEditingCompany({ ...editingCompany, limits: { ...editingCompany.limits, maxTotalConcurrency: Number(event.target.value), maxCampaignConcurrency: Math.min(editingCompany.limits.maxCampaignConcurrency, Number(event.target.value)) } })}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800" /></label>
+              <label className="font-bold text-slate-500">Maximum Campaign Concurrency<input type="number" required min={1} max={Math.min(20, editingCompany.limits.maxTotalConcurrency)} value={editingCompany.limits.maxCampaignConcurrency || ''}
+                onChange={event => setEditingCompany({ ...editingCompany, limits: { ...editingCompany.limits, maxCampaignConcurrency: Number(event.target.value) } })}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800" /></label>
+              <div className="md:col-span-2"><CompanyQueueLimitFields limits={editingCompany.limits} onChange={limits => setEditingCompany({ ...editingCompany, limits: { ...editingCompany.limits, ...limits } })} /></div>
               <label className="font-bold text-slate-500">Company / Tenant Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Organization Name<input required value={editingCompany.organizationName} onChange={(e) => setEditingCompany({ ...editingCompany, organizationName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Workspace Name<input required value={editingCompany.workspaceName} onChange={(e) => setEditingCompany({ ...editingCompany, workspaceName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
@@ -751,6 +768,12 @@ function CompaniesListView() {
 
             {/* Modal Form body */}
             <form onSubmit={handleCreateCompany} className="flex-1 overflow-y-auto p-6 space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500" htmlFor="company-live-concurrency">Live Phone Call Concurrency</label>
+                <input id="company-live-concurrency" type="number" required min={1} max={10000} step={1} value={liveCallConcurrency} onChange={(event) => setLiveCallConcurrency(event.target.value)} placeholder="e.g. 50" className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-800 outline-none focus:border-indigo-500" />
+                <p className="mt-1 text-xs text-slate-500">Maximum simultaneous live phone calls allowed for this company.</p>
+              </div>
+              <CompanyQueueLimitFields limits={queueLimits} onChange={setQueueLimits} />
               {successMessage && (
                 <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl text-xs font-bold animate-pulse">
                   {successMessage}

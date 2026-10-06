@@ -189,7 +189,11 @@ export async function processInboundPlivoHangup(input) {
       throw new AppError(503, 'Telephony account Hangup URL is not configured', 'PLIVO_HANGUP_URL_NOT_CONFIGURED');
     }
     if (!validatePlivoAccountSignatures({
-      url: call.hangup_url,
+      url: input.reservationId ? (() => {
+        const url = new URL(call.hangup_url);
+        url.searchParams.set('capacity_id', input.reservationId);
+        return url.toString();
+      })() : call.hangup_url,
       nonce: input.nonce,
       signature: input.signature,
       mainSignature: input.mainSignature,

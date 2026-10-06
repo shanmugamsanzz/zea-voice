@@ -19,7 +19,7 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
   return contextRunner(async (client) => {
     const platformNumber = call.direction === 'outbound' ? call.from : call.to;
     const assignment = await client.query(
-      `SELECT pa.tenant_id,COALESCE(tl.max_total_concurrency,20) max_total_concurrency,
+      `SELECT pa.tenant_id,tl.max_total_concurrency,tl.max_inbound_queue_size,tl.max_inbound_wait_seconds,
           COALESCE(ts.recording_enabled,true) recording_enabled
          FROM phone_numbers pn
          JOIN phone_number_assignments pa ON pa.phone_number_id=pn.id AND pa.released_at IS NULL
@@ -30,6 +30,10 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
     );
     if (!assignment.rowCount) {
       throw new AppError(404, 'Called number is not assigned to a company', 'VOICE_PHONE_NOT_ASSIGNED');
+    }
+    if (!Number.isInteger(Number(assignment.rows[0].max_total_concurrency))
+      || Number(assignment.rows[0].max_total_concurrency) < 1) {
+      throw new AppError(409, 'Company live-call concurrency is not configured.', 'COMPANY_CONCURRENCY_NOT_CONFIGURED');
     }
 
     const agentResult = await client.query(
@@ -87,6 +91,8 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
       callDirection: call.direction,
       usageDirection: agent.usage_direction,
       concurrencyLimit: Number(assignment.rows[0].max_total_concurrency),
+      inboundQueueMaxSize: assignment.rows[0].max_inbound_queue_size,
+      inboundQueueMaxWaitSeconds: assignment.rows[0].max_inbound_wait_seconds,
       recordingEnabled: Boolean(assignment.rows[0].recording_enabled),
       stt: model(configured, 'stt'),
       llm: model(configured, 'llm'),

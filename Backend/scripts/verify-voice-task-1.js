@@ -58,6 +58,33 @@ const outbound = await validateIncomingPlivoCall({
 assert.equal(outbound.direction, 'outbound');
 assert.equal(resolvedPlatformNumbers.at(-1), outboundPayload.From);
 
+const reservationId = '00000000-0000-4000-8000-000000000003';
+const capacityUrl = `${url}?capacity_id=${reservationId}`;
+const capacitySignature = crypto.createHmac('sha256', token)
+  .update(`${capacityUrl}.${outboundValues}.${nonce}`).digest('base64');
+await validateIncomingPlivoCall({ payload: outboundPayload, rawPayload: outboundPayload,
+  nonce, signature: capacitySignature, reservationId }, dependencies);
+await assert.rejects(validateIncomingPlivoCall({ payload: outboundPayload, rawPayload: outboundPayload,
+  nonce, signature: outboundSignature, reservationId }, dependencies), e => e.code === 'PLIVO_SIGNATURE_INVALID');
+
+const hangupUrl = `${process.env.PUBLIC_BASE_URL}/webhooks/plivo/hangup`;
+const hangupSignature = crypto.createHmac('sha256', token)
+  .update(`${hangupUrl}?capacity_id=${reservationId}.${outboundValues}.${nonce}`).digest('base64');
+const hangup = await validateIncomingPlivoCall({ payload: outboundPayload, rawPayload: outboundPayload,
+  nonce, signature: hangupSignature, reservationId, callbackType: 'hangup' }, {
+  authToken: token, loadCalledNumberAccount: async () => ({ phone_status: 'active',
+    account_status: 'connected', hangup_url: hangupUrl, tenant_id: 'company' }),
+});
+assert.equal(hangup.capacityTenantId, 'company');
+
+const queuePollUrl = `${url}?queue_poll=1`;
+const queuePollSignature = crypto.createHmac('sha256', token)
+  .update(`${queuePollUrl}.${values}.${nonce}`).digest('base64');
+await validateIncomingPlivoCall({ payload, rawPayload: payload, nonce,
+  signature: queuePollSignature, queuePoll: true }, dependencies);
+await assert.rejects(validateIncomingPlivoCall({ payload, rawPayload: payload, nonce,
+  signature, queuePoll: true }, dependencies), e => e.code === 'PLIVO_SIGNATURE_INVALID');
+
 const rawPlivoPayload = {
   ...payload,
   From: '919876543210',

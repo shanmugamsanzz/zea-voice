@@ -1,4 +1,4 @@
-import { Worker } from 'bullmq';
+import { Worker, DelayedError } from 'bullmq';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { executeCampaignTask } from './campaign-execution.service.js';
@@ -12,10 +12,22 @@ const connection = {
 };
 const workers = [];
 
+export async function processCampaignQueueJob(job, token, dependencies = {}) {
+  const execute = dependencies.executeTask ?? executeCampaignTask;
+  return execute(job.data.taskId, {
+    deferTask: async (_task, delay) => {
+      // Keep the same job in its original batch/realtime/retry queue. Waiting
+      // for capacity is not a failed call attempt and consumes no retries.
+      await job.moveToDelayed((dependencies.now?.() ?? Date.now()) + delay, token);
+      throw new DelayedError();
+    },
+  });
+}
+
 export function startCampaignWorkers() {
   if (!env.CAMPAIGN_WORKERS_ENABLED || workers.length) return workers;
   for (const queueName of ['batch-calls', 'realtime-calls', 'call-retries']) {
-    const worker = new Worker(queueName, (job) => executeCampaignTask(job.data.taskId), {
+    const worker = new Worker(queueName, (job, token) => processCampaignQueueJob(job, token), {
       connection,
       prefix: env.QUEUE_PREFIX,
       concurrency: env.CAMPAIGN_WORKER_CONCURRENCY,

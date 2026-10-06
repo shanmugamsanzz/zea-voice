@@ -42,6 +42,9 @@ function mapCompany(row) {
     limits: {
       maxCampaignConcurrency: row.max_campaign_concurrency,
       maxTotalConcurrency: row.max_total_concurrency,
+      maxInboundQueueSize: row.max_inbound_queue_size,
+      maxInboundWaitSeconds: row.max_inbound_wait_seconds,
+      maxOutboundQueuedTasks: row.max_outbound_queued_tasks,
       maxAgents: row.max_agents,
       maxUsers: row.max_users,
       maxPhoneNumbers: row.max_phone_numbers,
@@ -61,6 +64,7 @@ const companySelect = `
          t.timezone, t.status, w.name AS workspace_name,
          s.locale, s.currency,
          l.max_campaign_concurrency, l.max_total_concurrency, l.max_agents,
+         l.max_inbound_queue_size, l.max_inbound_wait_seconds, l.max_outbound_queued_tasks,
          l.max_users, l.max_phone_numbers, l.max_campaigns,
          (SELECT count(*) FROM tenant_memberships m
           WHERE m.tenant_id = t.id AND m.status = 'active' AND m.deleted_at IS NULL) AS team_size,
@@ -125,11 +129,13 @@ export async function createCompany(actorUserId, input, metadata = {}) {
       await client.query(
         `INSERT INTO tenant_limits
           (tenant_id, max_campaign_concurrency, max_total_concurrency, max_agents,
-           max_users, max_phone_numbers, max_campaigns)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           max_users, max_phone_numbers, max_campaigns, max_inbound_queue_size,
+           max_inbound_wait_seconds, max_outbound_queued_tasks)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [tenant.id, input.limits.maxCampaignConcurrency, input.limits.maxTotalConcurrency,
           input.limits.maxAgents, input.limits.maxUsers, input.limits.maxPhoneNumbers,
-          input.limits.maxCampaigns],
+          input.limits.maxCampaigns, input.limits.maxInboundQueueSize,
+          input.limits.maxInboundWaitSeconds, input.limits.maxOutboundQueuedTasks],
       );
       await client.query(
         `INSERT INTO company_credit_wallets (tenant_id, currency, unit) VALUES ($1, 'INR', 'credit')`,
@@ -249,10 +255,12 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
       await client.query(
         `UPDATE tenant_limits SET
            max_campaign_concurrency = $2, max_total_concurrency = $3, max_agents = $4,
-           max_users = $5, max_phone_numbers = $6, max_campaigns = $7
+           max_users = $5, max_phone_numbers = $6, max_campaigns = $7,
+           max_inbound_queue_size=$8, max_inbound_wait_seconds=$9, max_outbound_queued_tasks=$10
          WHERE tenant_id = $1`,
         [tenantId, limits.maxCampaignConcurrency, limits.maxTotalConcurrency, limits.maxAgents,
-          limits.maxUsers, limits.maxPhoneNumbers, limits.maxCampaigns],
+          limits.maxUsers, limits.maxPhoneNumbers, limits.maxCampaigns,
+          limits.maxInboundQueueSize, limits.maxInboundWaitSeconds, limits.maxOutboundQueuedTasks],
       );
     }
     const after = mapCompany(await getCompanyRow(client, tenantId));

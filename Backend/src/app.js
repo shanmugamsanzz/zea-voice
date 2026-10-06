@@ -15,6 +15,7 @@ import { catalogRouter, providerRouter } from './providers/provider.routes.js';
 import { telephonyAdminRouter, tenantPhoneRouter } from './telephony/telephony.routes.js';
 import { creditAdminRouter, tenantCreditRouter } from './credits/credit.routes.js';
 import { queueAdminRouter } from './queues/queue.routes.js';
+import { companyQueueRouter } from './queues/company-queue.routes.js';
 import { apiKeyRouter } from './api-keys/api-key.routes.js';
 import { callAdminRouter, tenantCallRouter } from './calls/call.routes.js';
 import { paymentAdminRouter, tenantPaymentRouter } from './payments/payment.routes.js';
@@ -107,6 +108,7 @@ export function createApp() {
   app.use('/admin/credits', creditAdminRouter);
   app.use('/credits', tenantCreditRouter);
   app.use('/admin/queues', queueAdminRouter);
+  app.use('/queues', companyQueueRouter);
   app.use('/api-keys', apiKeyRouter);
   app.use('/api/public', publicTaskRouter);
   app.use('/admin/calls', callAdminRouter);

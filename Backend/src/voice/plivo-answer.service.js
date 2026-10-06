@@ -9,7 +9,9 @@ async function loadCalledNumberAccount(to) {
   return withPlatformAdminContext(null, async (client) => {
     const result = await client.query(
       `SELECT pn.id AS phone_number_id, pn.status AS phone_status, pn.telephony_account_id,
-          ta.auth_token_encrypted, ta.status AS account_status, ta.answer_url, ta.recording_callback_url,
+          ta.auth_token_encrypted, ta.status AS account_status, ta.answer_url, ta.hangup_url, ta.recording_callback_url,
+          (SELECT pa.tenant_id FROM phone_number_assignments pa WHERE pa.phone_number_id=pn.id
+            AND pa.released_at IS NULL LIMIT 1) AS tenant_id,
           COALESCE(parent.auth_token_encrypted,ta.auth_token_encrypted) AS main_auth_token_encrypted
          FROM phone_numbers pn
          JOIN telephony_accounts ta ON ta.id=pn.telephony_account_id
@@ -34,7 +36,17 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
   if (account.account_status !== 'connected') {
     throw new AppError(409, 'Plivo account is not connected', 'PLIVO_ACCOUNT_NOT_CONNECTED');
   }
-  const answerUrl = dependencies.answerUrl ?? account.answer_url;
+  let answerUrl = dependencies.answerUrl ?? (input.callbackType === 'hangup' ? account.hangup_url : account.answer_url);
+  if (answerUrl && input.reservationId) {
+    const url = new URL(answerUrl);
+    url.searchParams.set('capacity_id', input.reservationId);
+    answerUrl = url.toString();
+  }
+  if (answerUrl && input.queuePoll) {
+    const url = new URL(answerUrl);
+    url.searchParams.set('queue_poll', '1');
+    answerUrl = url.toString();
+  }
   if (!answerUrl) {
     throw new AppError(503, 'Telephony account Answer URL is not configured', 'PLIVO_ANSWER_URL_NOT_CONFIGURED');
   }
@@ -58,6 +70,7 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
   }
   return {
     providerCallId: input.payload.CallUUID,
+    capacityTenantId: account.tenant_id,
     from: input.payload.From,
     to: input.payload.To,
     direction,
@@ -65,6 +78,7 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
     phoneNumberId: account.phone_number_id,
     telephonyAccountId: account.telephony_account_id,
     recordingCallbackUrl: account.recording_callback_url || null,
+    answerUrl: account.answer_url,
   };
 }
 

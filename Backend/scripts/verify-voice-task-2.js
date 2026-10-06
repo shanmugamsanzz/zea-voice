@@ -24,9 +24,9 @@ function runner({ direction = 'both', modelsAvailable = true } = {}) {
       stt_model_id: 'stt-id', llm_model_id: 'llm-id', tts_model_id: 'tts-id',
     }] };
     return { rowCount: modelsAvailable ? 1 : 0, rows: modelsAvailable ? [{
-      stt_model_id: 'stt-id', stt_model_key: 'stt-model', stt_model_name: 'STT', stt_provider_id: 'stt-provider', stt_provider_name: 'STT Provider',
-      llm_model_id: 'llm-id', llm_model_key: 'llm-model', llm_model_name: 'LLM', llm_provider_id: 'llm-provider', llm_provider_name: 'LLM Provider',
-      tts_model_id: 'tts-id', tts_model_key: 'tts-model', tts_model_name: 'TTS', tts_provider_id: 'tts-provider', tts_provider_name: 'TTS Provider',
+      stt_model_id: 'stt-id', stt_model_key: 'stt-model', stt_model_name: 'STT', stt_provider_id: 'stt-provider', stt_provider_name: 'STT Provider', stt_runtime_connection_type: 'sarvam',
+      llm_model_id: 'llm-id', llm_model_key: 'llm-model', llm_model_name: 'LLM', llm_provider_id: 'llm-provider', llm_provider_name: 'LLM Provider', llm_runtime_connection_type: 'openai',
+      tts_model_id: 'tts-id', tts_model_key: 'tts-model', tts_model_name: 'TTS', tts_provider_id: 'tts-provider', tts_provider_name: 'TTS Provider', tts_runtime_connection_type: 'cartesia',
     }] : [] };
   } });
 }

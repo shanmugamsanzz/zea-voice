@@ -4,6 +4,7 @@ import {
   Copy, Link, Play, Radio, Wrench, X,
 } from 'lucide-react';
 import { apiRequest } from '../../lib/api';
+import { AgentPhoneTestButton } from './AgentPhoneTestButton';
 import {
   BrowserAgentMediaClient, BrowserAgentMediaState, BrowserTestSessionContract,
 } from '../../lib/browserAgentMedia';
@@ -215,6 +216,7 @@ export function BrowserAgentTestPanel({ agent, onClose, sessionClient, allowShar
             <div ref={transcriptEndRef} />
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 border-t border-slate-200 p-4 dark:border-slate-800">
+            {!sessionClient && <AgentPhoneTestButton agent={agent} />}
             {!active ? <button disabled={agent.status !== 'active' || ending} onClick={() => void start()} className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-3 text-xs font-black text-slate-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4 fill-current" />Start</button> : <>
               <button onClick={() => { const next = !muted; mediaRef.current?.setMuted(next); setMuted(next); }} className={`inline-flex items-center gap-2 rounded-xl border px-4 py-3 text-xs font-black ${muted ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'}`}>{muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}{muted ? 'Unmute' : 'Mute'}</button>
               <button disabled={ending} onClick={() => void end()} className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-3 text-xs font-black text-white hover:bg-red-400 disabled:opacity-50">{ending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <PhoneOff className="h-4 w-4" />}End</button>

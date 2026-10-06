@@ -169,6 +169,7 @@ export async function makePlivoCall(authId, authToken, input, fetchImpl = fetch,
         ring_method: 'POST',
         hangup_url: input.hangupUrl,
         hangup_method: 'POST',
+        ...(input.ringTimeoutSeconds ? { ring_timeout: input.ringTimeoutSeconds } : {}),
       }),
       signal: AbortSignal.timeout(env.PROVIDER_REQUEST_TIMEOUT_MS),
     });
