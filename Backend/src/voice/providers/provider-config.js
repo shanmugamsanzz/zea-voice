@@ -122,7 +122,7 @@ export function buildCanonicalRuntimeConfiguration({
     tools: Object.freeze(configuredToolContract(runtimeTools).map((tool) => Object.freeze(tool))),
     speech: Object.freeze({
       language: row.language,
-      voiceId: row.voice_id,
+      voiceId: ttsRuntimeSettings.voiceId ?? row.voice_id,
       sttModelId: row.stt_model_id,
       llmModelId: row.llm_model_id,
       ttsModelId: row.tts_model_id,
@@ -277,7 +277,10 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);
     // TTS behavior comes from Super Admin provider/model parameters. The
     // agent only contributes the voice selected by its configured model.
-    const ttsRuntimeSettings = { voiceId: row.voice_id };
+    const configuredTts = provider(row, 'tts', decrypt).effectiveSettings;
+    const configuredVoice = [configuredTts.voiceId, configuredTts.voice_id, configuredTts.voice]
+      .find((value) => typeof value === 'string' && value.trim());
+    const ttsRuntimeSettings = { voiceId: configuredVoice?.trim() || row.voice_id };
     const runtimeTools = tools(row.tools, decrypt);
     const configuration = buildCanonicalRuntimeConfiguration({
       row,
@@ -302,7 +305,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         timeZone: row.runtime_timezone,
         usageDirection: row.usage_direction,
         callDirection: resolvedAgent.callDirection ?? null,
-        voiceId: row.voice_id,
+        voiceId: ttsRuntimeSettings.voiceId,
         prompt: row.prompt,
         welcomeMessage: row.welcome_message,
         temperature: Number(row.temperature),

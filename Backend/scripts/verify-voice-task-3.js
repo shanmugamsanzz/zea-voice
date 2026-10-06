@@ -45,6 +45,7 @@ for (const type of ['stt', 'llm', 'tts']) {
     [`${type}_model_name`]: `${type.toUpperCase()} Model`, [`${type}_model_settings`]: { streaming: true },
     [`${type}_model_capabilities`]: { languages: ['en'] }, [`${type}_provider_id`]: `${type}-provider-id`,
     [`${type}_provider_name`]: `${type.toUpperCase()} Provider`, [`${type}_provider_slug`]: `${type}-provider`,
+    [`${type}_runtime_connection_type`]: { stt: 'sarvam', llm: 'openai', tts: 'cartesia' }[type],
     [`${type}_base_url`]: `https://${type}.example.com`,
     [`${type}_parameters`]: [
       { key: `${type.toUpperCase()}_MODEL`, plainValue: `${type}-model`, encryptedValue: null, isSecret: false },
@@ -97,6 +98,19 @@ assert.equal(Object.hasOwn(profile.configuration, 'knowledge'), false);
 assert.equal(profile.configuration.tools[0].name, 'Lookup_Record');
 assert.deepEqual(profile.configuration.tools[0].inputSchema.required, ['reference']);
 assert.equal(profile.configuration.speech.voiceId, 'selected-voice');
+// New calls must use the current Super Admin voice, even when the agent's
+// historical saved voice remains unchanged. Cache identity must agree too.
+row.tts_model_settings.voiceId = 'updated-model-voice';
+const updatedVoiceProfile = await loadAgentRuntimeProfile(resolved, {
+  contextRunner,
+  decryptCredential: (value) => value === 'encrypted-tool'
+    ? JSON.stringify({ token: 'decrypted-tool-token' }) : `decrypted:${value}`,
+});
+assert.equal(updatedVoiceProfile.providers.tts.effectiveSettings.voiceId, 'updated-model-voice');
+assert.equal(updatedVoiceProfile.agent.voiceId, 'updated-model-voice');
+assert.equal(updatedVoiceProfile.configuration.speech.voiceId, 'updated-model-voice');
+assert.equal(updatedVoiceProfile.agent.speech.speaker.voiceId, 'updated-model-voice');
+delete row.tts_model_settings.voiceId;
 assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');
 assert.equal(profile.integrations.postCall.api.active, true);
 
