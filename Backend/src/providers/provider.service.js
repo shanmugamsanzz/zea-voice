@@ -100,8 +100,10 @@ function runtimeBoundCapabilities(provider, capabilities) {
 
 function normalizedModelSettings(input, current = {}) {
   const settings = { ...(current ?? {}), ...(input.settings ?? {}) };
-  if (input.voiceId !== undefined) settings.voiceId = input.voiceId;
-  if (input.language !== undefined) settings.language = input.language;
+  // Older editors send these values twice. Preserve an explicitly edited
+  // settings value instead of replacing it with a stale top-level field.
+  if (input.voiceId !== undefined && !Object.hasOwn(input.settings ?? {}, 'voiceId')) settings.voiceId = input.voiceId;
+  if (input.language !== undefined && !Object.hasOwn(input.settings ?? {}, 'language')) settings.language = input.language;
   return settings;
 }
 
