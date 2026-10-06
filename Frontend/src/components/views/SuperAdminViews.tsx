@@ -1945,6 +1945,12 @@ function VoiceProvidersView() {
     setSubmitting(true); setError('');
     try {
       const settings = Object.fromEntries(modelParameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), modelParameterValue(parameter.value)]));
+      if (Object.hasOwn(settings, 'voiceId') || Object.hasOwn(settings, 'language')) {
+        throw new Error('Use the Voice ID and Language fields above to edit these values, rather than adding duplicate model parameters.');
+      }
+      // Include cleared fields so the backend settings merge cannot restore old values.
+      settings.voiceId = modelVoiceId.trim();
+      settings.language = modelLanguage.trim();
       let capabilities: Record<string, unknown>;
       try {
         const parsed = JSON.parse(modelCapabilities || '{}');
@@ -1955,7 +1961,6 @@ function VoiceProvidersView() {
         setSubmitting(false);
         return;
       }
-      const existingModel = editingModelId ? providerModels.find((model) => model.id === editingModelId) : null;
       const saved = await apiRequest<ProviderModelApiData>(editingModelId
         ? `/admin/providers/models/${editingModelId}`
         : `/admin/providers/${modelProvider.id}/models`, {
@@ -1986,7 +1991,7 @@ function VoiceProvidersView() {
     setModelVoiceId(typeof model.settings.voiceId === 'string' ? model.settings.voiceId : '');
     setModelLanguage(typeof model.settings.language === 'string' ? model.settings.language : '');
     setModelCapabilities(JSON.stringify(model.capabilities, null, 2));
-    setModelParameters(Object.entries(model.settings).map(([key, value]) => ({
+    setModelParameters(Object.entries(model.settings).filter(([key]) => key !== 'voiceId' && key !== 'language').map(([key, value]) => ({
       key,
       value: typeof value === 'string' ? value : JSON.stringify(value),
     })));
