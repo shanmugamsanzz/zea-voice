@@ -44,15 +44,22 @@ export async function getCompanyQueue(auth, filters, dependencies = {}) {
       const limits = await client.query(`SELECT max_total_concurrency,max_inbound_queue_size,
         max_inbound_wait_seconds,max_outbound_queued_tasks FROM tenant_limits WHERE tenant_id=$1`, [auth.tenantId]);
       if (!limits.rowCount) throw new AppError(404, 'Company queue settings were not found', 'COMPANY_QUEUE_CONFIGURATION_MISSING');
-      const count = await client.query("SELECT count(*)::int count FROM campaign_tasks WHERE tenant_id=$1 AND status='queued' AND archived_at IS NULL", [auth.tenantId]);
-      const waiting = await client.query(`SELECT t.id,t.lead_phone,t.source,t.queue_reason,t.scheduled_for,
+      const count = await client.query(`SELECT count(*)::int count FROM (
+        SELECT id FROM campaign_tasks WHERE tenant_id=$1 AND status='queued' AND archived_at IS NULL
+        UNION ALL SELECT id FROM agent_phone_test_requests WHERE tenant_id=$1 AND status='queued'
+      ) waiting`, [auth.tenantId]);
+      const waiting = await client.query(`SELECT * FROM (SELECT t.id,t.lead_phone,t.source::text,t.queue_reason::text,t.scheduled_for,
         COALESCE((SELECT max(a.ended_at) FROM campaign_task_attempts a WHERE a.task_id=t.id),t.created_at) AS waiting_since,
-        t.agent_id,va.name AS agent_name,t.campaign_id,c.name AS campaign_name,c.status AS campaign_status,
-        t.last_error FROM campaign_tasks t
+        t.agent_id,va.name AS agent_name,t.campaign_id,c.name AS campaign_name,c.status::text AS campaign_status,
+        t.last_error,t.created_at FROM campaign_tasks t
         JOIN campaigns c ON c.id=t.campaign_id AND c.tenant_id=t.tenant_id
         JOIN voice_agents va ON va.id=t.agent_id AND va.tenant_id=t.tenant_id
         WHERE t.tenant_id=$1 AND t.status='queued' AND t.archived_at IS NULL
-        ORDER BY t.created_at,t.id LIMIT $2 OFFSET $3`, [auth.tenantId, filters.pageSize, offset]);
+        UNION ALL SELECT p.id,p.phone,'phone_test',p.queue_reason,NULL::timestamptz,p.created_at,
+          p.agent_id,a.name,NULL::uuid,NULL::text,NULL::text,p.last_error,p.created_at
+        FROM agent_phone_test_requests p JOIN voice_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id
+        WHERE p.tenant_id=$1 AND p.status='queued') waiting
+        ORDER BY created_at,id LIMIT $2 OFFSET $3`, [auth.tenantId, filters.pageSize, offset]);
       return { limits: limits.rows[0], outboundCount: Number(count.rows[0].count), outbound: waiting.rows };
     }),
     clientRedis.eval(snapshotScript, 8, ...inboundQueueKeys(auth.tenantId, 'snapshot'),

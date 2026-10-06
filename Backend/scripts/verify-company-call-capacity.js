@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 process.env.NODE_ENV = 'test';
+process.env.VOICE_COMPANY_QUEUE_ENABLED = 'false';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost/test';
 process.env.REDIS_HOST ??= '127.0.0.1';
 const { VoiceCallOwnership } = await import('../src/voice/call-ownership.service.js');

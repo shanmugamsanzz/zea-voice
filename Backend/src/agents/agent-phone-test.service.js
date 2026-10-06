@@ -9,12 +9,26 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../config/logger.js';
 import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { capacityCallbackUrl, outboundReservationTtlSeconds, outboundRingTimeoutSeconds } from '../voice/call-capacity.service.js';
+import { isCompanyCallQueueEnabled } from '../queues/company-queue-feature.js';
 
 export async function startAgentPhoneTest(auth, agentId, input, dependencies = {}) {
   const phone = normalizePhone(input.phone);
   if (!phone) throw new AppError(400, 'Enter a valid phone number with country code.', 'PHONE_TEST_INVALID_NUMBER');
+  if (isCompanyCallQueueEnabled(auth.tenantId)) {
+    const { submitQueuedPhoneTest } = await import('./agent-phone-test-queue.service.js');
+    return submitQueuedPhoneTest(auth, agentId, { ...input, phone }, dependencies);
+  }
   const context = dependencies.contextRunner ?? withPlatformAdminContext;
-  const account = await context(auth.userId, async (client) => {
+  const account = await context(auth.userId, client => loadPhoneTestAccount(client, auth, agentId, dependencies));
+  const ownership = dependencies.ownership ?? voiceCallOwnership;
+  const reservationId = randomUUID();
+  await ownership.acquire({ tenantId: auth.tenantId, providerCallId: reservationId,
+    limit: account.max_total_concurrency, ttlSeconds: outboundReservationTtlSeconds,
+    metadata: { phone, agentId, agentName: account.name, direction: 'outbound', source: 'phone_test' } });
+  return dialPhoneTest(auth, agentId, phone, account, reservationId, dependencies);
+}
+
+export async function loadPhoneTestAccount(client, auth, agentId, dependencies = {}) {
     const result = await client.query(`SELECT a.*,pn.e164,ta.auth_id,ta.auth_token_encrypted,
         ta.answer_url,ta.hangup_url,ta.status account_status,tl.max_total_concurrency
       FROM voice_agents a
@@ -41,12 +55,10 @@ export async function startAgentPhoneTest(auth, agentId, input, dependencies = {
       throw new AppError(409, 'Company live-call concurrency is not configured.', 'COMPANY_CONCURRENCY_NOT_CONFIGURED');
     }
     return row;
-  });
+}
+
+export async function dialPhoneTest(auth, agentId, phone, account, reservationId, dependencies = {}) {
   const ownership = dependencies.ownership ?? voiceCallOwnership;
-  const reservationId = randomUUID();
-  await ownership.acquire({ tenantId: auth.tenantId, providerCallId: reservationId,
-    limit: account.max_total_concurrency, ttlSeconds: outboundReservationTtlSeconds,
-    metadata: { phone, agentId, agentName: account.name, direction: 'outbound', source: 'phone_test' } });
   try {
     const result = await (dependencies.makeCall ?? makePlivoCall)(account.auth_id,
       (dependencies.decrypt ?? decryptCredential)(account.auth_token_encrypted), {

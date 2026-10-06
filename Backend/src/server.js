@@ -7,6 +7,7 @@ import { runPendingMigrations } from './infrastructure/migrations.js';
 import { checkRedis, closeRedis } from './infrastructure/redis.js';
 import { closeQueues } from './queues/queue.registry.js';
 import { closeCampaignWorkers, startCampaignWorkers } from './campaigns/campaign.workers.js';
+import { closePhoneTestQueueWorker, startPhoneTestQueueWorker } from './agents/agent-phone-test-queue.worker.js';
 import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
 import { attachBrowserTestMediaWebSocket } from './voice/browser-test-media.socket.js';
@@ -30,6 +31,7 @@ async function bootstrap() {
 
   logger.info({ databaseHealth, redisHealth, ragHealth }, 'Infrastructure connections verified');
   startCampaignWorkers();
+  startPhoneTestQueueWorker();
   startRecordingWorker();
   await startPostCallSummaryWorker(executePostCallSummaryJob);
   startCallReconciliation();
@@ -55,9 +57,11 @@ async function bootstrap() {
     shuttingDown = true;
     logger.info({ signal }, 'Graceful shutdown started');
 
+    const phoneQueueClosing = closePhoneTestQueueWorker();
     await Promise.all([mediaWebSocket.close(), browserTestMediaWebSocket.close()]);
 
     server.close(async (serverError) => {
+      await phoneQueueClosing;
       await closeCallReconciliation();
       const results = await Promise.allSettled([
         closeCampaignWorkers(), closeRecordingWorker(),
@@ -85,6 +89,7 @@ async function bootstrap() {
 
 bootstrap().catch(async (error) => {
   logger.fatal({ err: error }, 'Backend startup failed');
+  await closePhoneTestQueueWorker();
   await Promise.allSettled([
     closeCampaignWorkers(), closeRecordingWorker(),
     closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),

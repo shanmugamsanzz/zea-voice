@@ -82,7 +82,7 @@ export function CompanyQueueView() {
                 onClick={() => void manage(`/queues/campaigns/${row.campaignId}/${row.campaignStatus === 'paused' ? 'resume' : 'pause'}`, row.id)}
                 className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-50">{row.campaignStatus === 'paused' ? 'Resume campaign' : 'Pause campaign'}</button>}
               <button type="button" disabled={Boolean(acting)} onClick={() => {
-                if (window.confirm(`Cancel the waiting call to ${row.phone}?`)) void manage(`/queues/tasks/${row.id}/cancel`, row.id);
+                if (window.confirm(`Cancel the waiting call to ${row.phone}?`)) void manage(row.source === 'phone_test' ? `/queues/phone-tests/${row.id}/cancel` : `/queues/tasks/${row.id}/cancel`, row.id);
               }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50">Cancel task</button>
             </div></td>}
           </tr>)}</tbody>

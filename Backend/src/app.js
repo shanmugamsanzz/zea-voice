@@ -34,6 +34,7 @@ import { publicTaskRouter } from './public-tasks/public-task.routes.js';
 import { pronunciationRouter } from './pronunciations/pronunciation.routes.js';
 import { ambienceRouter } from './ambience/ambience.routes.js';
 import { browserTestShareLinkRouter } from './voice/browser-test-share-link.routes.js';
+import { publicPhoneTestShareRouter } from './agents/phone-test-share-link.routes.js';
 //this is test messge for git commit  
 //this is the new test msg enable the rag in env server
 function redactRequestUrl(value) {
@@ -98,6 +99,7 @@ export function createApp() {
   });
   app.use('/health', healthRouter);
   app.use('/public/browser-test-links', browserTestShareLinkRouter);
+  app.use('/public/phone-test-links', publicPhoneTestShareRouter);
   app.use('/auth', authRouter);
   app.use('/admin/companies', companyRouter);
   app.use('/admin/developers', developerRouter);

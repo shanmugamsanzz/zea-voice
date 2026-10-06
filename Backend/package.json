@@ -15,6 +15,8 @@
     "verify:outbound-capacity-queues": "node scripts/verify-outbound-capacity-queues.js",
     "verify:inbound-waiting-queue": "node scripts/verify-inbound-waiting-queue.js",
     "verify:company-queue-settings": "node scripts/verify-company-queue-settings-and-access.js",
+    "verify:agent-phone-test-queue": "node scripts/verify-agent-phone-test-queue.js",
+    "verify:phone-test-share-links": "node scripts/verify-phone-test-share-links.js",
     "verify:company-queue-feature": "node scripts/verify-company-queue-feature.js",
     "verify:call-queue-release": "node scripts/verify-call-queue-release.js",
     "verify:agent-live-data-retrieval": "node scripts/verify-agent-live-data-retrieval.js",

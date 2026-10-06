@@ -17,6 +17,8 @@ import { useKpiCardDecorations } from './lib/useKpiCardDecorations';
 import { useSurfaceDecorations } from './lib/useSurfaceDecorations';
 import zeaVoiceBrand from './zea-voice-brand.png';
 import { PublicBrowserAgentTestView } from './views/PublicBrowserAgentTestView';
+import { PublicPhoneCallView } from './views/PublicPhoneCallView';
+import { sharedPhonePath, sharedPhoneToken } from './lib/publicPhoneCalls';
 
 function CoreApp() {
   useResizableTables();
@@ -87,6 +89,7 @@ function CoreApp() {
 }
 
 export default function App() {
+  if (sharedPhonePath(window.location.pathname)) return <PublicPhoneCallView token={sharedPhoneToken(window.location.hash)} />;
   const sharedTest = /^\/test\/([A-Za-z0-9_-]{32,128})\/?$/u.exec(window.location.pathname);
   if (sharedTest) return <PublicBrowserAgentTestView shareToken={sharedTest[1]} />;
   return (

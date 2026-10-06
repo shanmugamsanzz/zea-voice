@@ -17,6 +17,8 @@ const checks = [
   ['100 mixed-source outbound tasks, limit 3', 'verify-outbound-capacity-queues.js', true],
   ['mixed inbound/outbound, FIFO, reconstructed services and isolation', 'verify-inbound-waiting-queue.js', true],
   ['company settings, permissions and cancellation races', 'verify-company-queue-settings-and-access.js'],
+  ['queued agent phone tests and duplicate dispatch protection', 'verify-agent-phone-test-queue.js'],
+  ['secure phone-test sharing and public quotas', 'verify-phone-test-share-links.js'],
   ['signed Plivo callbacks', 'verify-voice-task-1.js'],
   ['agent answer admission', 'verify-voice-task-2.js'],
   ['callback continuity', 'verify-callback-continuity.js'],
@@ -46,6 +48,10 @@ try {
       const values = await database.query(`SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid
         WHERE t.typname='campaign_queue_reason' AND enumlabel IN ('company_capacity','campaign_capacity','coordination_unavailable')`);
       assert.equal(values.rowCount, 3, 'Queue reason migration is missing.');
+      const phoneQueue = await database.query("SELECT to_regclass('public.agent_phone_test_requests') AS table_name");
+      assert.ok(phoneQueue.rows[0].table_name, 'Apply the phone-test queue migration before rollout.');
+      const shareLinks = await database.query("SELECT to_regclass('public.phone_test_share_links') AS table_name");
+      assert.ok(shareLinks.rows[0].table_name, 'Apply the phone-test share-link migration before rollout.');
       report.checks.push({ name: 'live PostgreSQL restricted role and migration', passed: true });
     } finally { await closeDatabase(); }
     // Staging evidence is explicit; a simulation or schema check is insufficient.

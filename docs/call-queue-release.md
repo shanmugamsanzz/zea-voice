@@ -35,6 +35,8 @@ from production readiness and is ignored by Git.
 Use an isolated staging deployment of the committed revision. Apply migrations
 before starting the new backend; migration
 `1791269000000_company-queue-settings.js` is required even while the flag is off.
+Phone-test waiting also requires `1791280000000_agent-phone-test-queue.js`.
+Secure calling links require `1791290000000_phone-test-share-links.js`.
 
 ```bash
 cd Backend

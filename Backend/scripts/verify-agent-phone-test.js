@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
+process.env.VOICE_COMPANY_QUEUE_ENABLED = 'false';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost/test';
 process.env.REDIS_HOST ??= 'localhost';
 const { startAgentPhoneTest } = await import('../src/agents/agent-phone-test.service.js');

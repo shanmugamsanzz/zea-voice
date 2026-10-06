@@ -7,6 +7,7 @@ import { getCompanyQueue, cancelCompanyQueuedTask } from './company-queue.servic
 import { transitionCampaign } from '../campaigns/campaign.service.js';
 import { wakePausedCampaignTasks } from '../campaigns/campaign-execution.service.js';
 import { requireCompanyCallQueueEnabled } from './company-queue-feature.js';
+import { cancelCompanyPhoneTest } from '../agents/agent-phone-test-queue.service.js';
 
 const context = request => ({ ...request.auth, ...request.tenant });
 function valid(schema, value) {
@@ -24,6 +25,10 @@ companyQueueRouter.get('/', async (req, res) => {
 companyQueueRouter.post('/tasks/:taskId/cancel', developers, async (req, res) => {
   const { taskId } = valid(z.object({ taskId: z.string().uuid() }), req.params);
   res.json({ success: true, data: await cancelCompanyQueuedTask(context(req), taskId) });
+});
+companyQueueRouter.post('/phone-tests/:requestId/cancel', developers, async (req, res) => {
+  const { requestId } = valid(z.object({ requestId: z.string().uuid() }), req.params);
+  res.json({ success: true, data: await cancelCompanyPhoneTest(context(req), requestId) });
 });
 companyQueueRouter.post('/campaigns/:campaignId/:action', developers, async (req, res) => {
   const { campaignId, action } = valid(z.object({ campaignId: z.string().uuid(), action: z.enum(['pause', 'resume']) }), req.params);
