@@ -115,7 +115,12 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       throw new AppError(403,'Follow-up action requires workflow authorization','FOLLOW_UP_NOT_AUTHORIZED');
     validateToolArguments(toolCall.arguments??{},manageFollowUpTool.configuration.inputSchema);
     const output=await manageLiveFollowUp(runtimeProfile,call,toolCall,{authorized:true,contextRunner:dependencies.followUpContextRunner});
-    return {id:toolCall.id??null,toolId:tool.id,name:tool.name,success:true,verified:true,output,durationMs:Math.round((performance.now()-startedAt)*100)/100};
+    const success=output.scheduled===true || output.canceled===true;
+    logger.info({stage:'follow_up.result',callId:call.id,toolName:tool.name,action:toolCall.arguments?.action,
+      scheduled:output.scheduled??false,canceled:output.canceled??false,taskId:output.id??null,
+      status:output.status??null,requestedFor:output.requestedFor??null,reason:output.reason??null,
+      clarificationRequired:output.clarificationRequired??false},'Follow-up scheduling result');
+    return {id:toolCall.id??null,toolId:tool.id,name:tool.name,success,verified:true,output,durationMs:Math.round((performance.now()-startedAt)*100)/100};
   }
   if(tool.id===updateContactTool.id&&tool.type===updateContactTool.type) {
     if(!workflowAuthorized||dependencies.requireWorkflowAuthorization!==true

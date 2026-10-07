@@ -93,6 +93,16 @@ assert.equal(mirrored.scheduled,true);assert.equal(mirrored.status,'queued');ass
 assert.equal(tasks.at(-1).campaign_task_id,'campaign-task');assert.equal(tasks.at(-1).campaign_origin_attempt_id,'original-attempt');
 assert.equal((await manageLiveFollowUp(profile,call,campaignRequest,{...deps,scheduleCampaign:()=>assert.fail('Duplicate callback must not consume another retry')})).idempotent,true);
 delete stored.campaign_task_id;delete stored.campaign_attempt_id;
+const tamilRequest={currentUserMessage:'இல்லை ஒரு 2 minutes கழிச்சு call பண்ணு',arguments:{action:'schedule',evidence:'இல்லை ஒரு 2 minutes கழிச்சு call பண்ணு',
+  purpose:'Continue the current conversation',kind:'callback',delayMinutes:2,callerConfirmed:true}};
+const beforeRelative=tasks.length;
+const relativeStarted=Date.now();
+const tamilScheduled=await manageLiveFollowUp(profile,call,tamilRequest,deps);
+assert.equal(tamilScheduled.scheduled,true);assert.equal(tasks.length,beforeRelative+1);
+assert.ok(Math.abs(new Date(tamilScheduled.requestedFor).getTime()-relativeStarted-120000)<2000);
+assert.equal((await manageLiveFollowUp(profile,call,tamilRequest,deps)).idempotent,true);
+assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:{...tamilRequest.arguments,callerConfirmed:false}},deps)).scheduled,false);
+assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:{...tamilRequest.arguments,delayMinutes:NaN}},deps)).scheduled,false);
 
 let transfer=0;
 const transferDeps={queueEnabled:()=>true,contextRunner:async operation=>operation({query:async(sql,values)=>{

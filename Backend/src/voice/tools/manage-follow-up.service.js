@@ -1,8 +1,10 @@
 export const manageFollowUpTool=Object.freeze({id:'builtin:manage_follow_up',name:'manage_follow_up',type:'internal_follow_up',
-  description:'Schedule or cancel a callback/reminder for the current caller on their current phone number. Use exact caller evidence. Relative requests may schedule immediately; absolute dates/times require a proposal and a later explicit confirmation. No caller-provided phone or company identifiers are accepted. A scheduled=false result means clarify or explain failure; never promise an unsaved follow-up.',
+  description:'Schedule or cancel a callback/reminder for the current caller on their current phone number. Use exact caller evidence. Interpret duration and consent from the current conversation using the agent prompt. For relative requests supply delayMinutes as a number and callerConfirmed=true only for an explicit request or confirmation. Do not rewrite caller evidence. Do not supply localDate/localTime for a relative duration. Relative requests may schedule immediately; absolute dates/times require a proposal and a later explicit confirmation. No caller-provided phone or company identifiers are accepted. A scheduled=false result means clarify or explain failure; never promise an unsaved follow-up.',
   configuration:{inputSchema:{type:'object',additionalProperties:false,required:['action','evidence'],properties:{
     action:{type:'string',enum:['schedule','confirm','cancel']},evidence:{type:'string',minLength:1,maxLength:2000},
     kind:{type:'string',enum:['callback','reminder']},purpose:{type:'string',minLength:1,maxLength:2000},
+    delayMinutes:{type:'number',minimum:0.5,maximum:43200},
+    callerConfirmed:{type:'boolean'},
     localDate:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$'},localTime:{type:'string',pattern:'^\\d{2}:\\d{2}$'},
     timeZone:{type:'string',minLength:1,maxLength:160},taskId:{type:'string',format:'uuid'},
   }}}});

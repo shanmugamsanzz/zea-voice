@@ -137,7 +137,12 @@ export async function applyUniversalWorkflowResult({
     conversation: conversationContext?.recentConversation ?? [],
     collectedDetails: argumentsValue,
   }));
-  if (!toolResult?.success) throw new AppError(502, 'The configured workflow tool failed',
+  const verifiedFollowUpResult = definition.workflowId === 'builtin:manage_follow_up'
+    && toolResult?.toolId === 'builtin:manage_follow_up' && toolResult.verified === true
+    && (typeof toolResult.output?.scheduled === 'boolean' || typeof toolResult.output?.canceled === 'boolean');
+  // A business rejection/clarification is a verified result for the LLM, not
+  // a transport failure. Keep its success=false for action observability.
+  if (!toolResult?.success && !verifiedFollowUpResult) throw new AppError(502, 'The configured workflow tool failed',
     'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_TOOL_FAILED');
   const nextState = activeWorkflowId === definition.workflowId
     ? workflowState(state, {}, null, null) : state;
