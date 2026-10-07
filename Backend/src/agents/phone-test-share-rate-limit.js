@@ -31,6 +31,6 @@ export async function consumePhoneShareCallLimits({ linkId, tenantId, phone, ip 
   return consumePhoneShareLimits([
     [`call-ip:${hash(ip)}`, 60, 3600], [`link-minute:${linkId}`, 10, 60],
     [`link-day:${linkId}`, 100, 86400], [`company-day:${tenantId}`, 200, 86400],
-    [`phone-hour:${hash(phone)}`, 3, 3600],
+    [`phone-hour:${hash(phone)}`, 20, 3600],
   ], client);
 }

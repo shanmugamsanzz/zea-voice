@@ -54,7 +54,7 @@ Redis checks quotas atomically and fails closed when coordination is unavailable
 | Call submissions per source IP | 60 per hour |
 | Call submissions per link | 10 per minute and 100 per day |
 | Call submissions per company across links | 200 per day |
-| Call submissions to the same number across links/companies | 3 per hour |
+| Call submissions to the same number across links/companies | 20 per hour |
 
 IP identity uses Express's existing trusted connection address. Forwarded IP headers
 are not trusted automatically; visitors behind the current reverse proxy may share

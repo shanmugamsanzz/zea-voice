@@ -88,7 +88,7 @@ const redis = { status:'ready',eval:async (_script,count,...args) => {
   for (const key of keys) counts.set(key,(counts.get(key) ?? 0)+1);
   return [0,0];
 } };
-for (let i=0;i<3;i++) await limits.consumePhoneShareCallLimits({linkId:randomUUID(),tenantId:randomUUID(),phone:'+919123456789',ip:`203.0.113.${i}`},redis);
+for (let i=0;i<20;i++) await limits.consumePhoneShareCallLimits({linkId:randomUUID(),tenantId:randomUUID(),phone:'+919123456789',ip:`203.0.113.${i}`},redis);
 await assert.rejects(limits.consumePhoneShareCallLimits({linkId:randomUUID(),tenantId:randomUUID(),phone:'+919123456789',ip:'203.0.113.9'},redis), e => e.statusCode === 429 && e.details.retryAfterSeconds === 3600);
 await assert.rejects(limits.consumePhoneShareReadLimit('ip',{status:'reconnecting'}), e => e.statusCode === 503);
 await assert.rejects(limits.consumePhoneShareReadLimit('ip',{status:'ready',eval:async()=>{throw new Error('Redis unavailable');}}), e => e.statusCode === 503);
