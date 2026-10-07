@@ -1,0 +1,9 @@
+export const manageFollowUpTool=Object.freeze({id:'builtin:manage_follow_up',name:'manage_follow_up',type:'internal_follow_up',
+  description:'Schedule or cancel a callback/reminder for the current caller on their current phone number. Use exact caller evidence. Relative requests may schedule immediately; absolute dates/times require a proposal and a later explicit confirmation. No caller-provided phone or company identifiers are accepted. A scheduled=false result means clarify or explain failure; never promise an unsaved follow-up.',
+  configuration:{inputSchema:{type:'object',additionalProperties:false,required:['action','evidence'],properties:{
+    action:{type:'string',enum:['schedule','confirm','cancel']},evidence:{type:'string',minLength:1,maxLength:2000},
+    kind:{type:'string',enum:['callback','reminder']},purpose:{type:'string',minLength:1,maxLength:2000},
+    localDate:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$'},localTime:{type:'string',pattern:'^\\d{2}:\\d{2}$'},
+    timeZone:{type:'string',minLength:1,maxLength:160},taskId:{type:'string',format:'uuid'},
+  }}}});
+export const followUpInstructions='Use manage_follow_up via EXECUTE only for explicit caller callback/reminder requests or cancellations, in either direction. Use the exact current caller quote as evidence. For absolute times clarify date, AM/PM and IANA timezone; use schedule to propose and ask the returned confirmation question including the exact date/time/timezone strings. Use confirm only on a later caller confirmation of that proposal. Do not infer consent from an appointment mention. Do not promise completion until scheduled=true/canceled=true. Capacity or low credits may delay actual dialing after the requested time. Callback requests inside a campaign consume its existing retry allowance. Ask which follow-up if cancellation is ambiguous. Do not change the caller phone or schedule a call for someone they mention.';

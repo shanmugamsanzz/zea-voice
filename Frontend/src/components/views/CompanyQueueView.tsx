@@ -20,11 +20,13 @@ const reasonLabels: Record<string, string> = {
   waiting_credits: 'Waiting for credits', campaign_paused: 'Campaign paused or draft', queue_unavailable: 'Queue unavailable',
   company_capacity: 'Company call limit reached', campaign_capacity: 'Campaign call limit reached',
   coordination_unavailable: 'Call coordination unavailable',
+  contact_active: 'Another follow-up for this contact is active',
+  queue_disabled: 'Company queue rollout is disabled',
 };
 const elapsed = (seconds = 0) => `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 
 export function CompanyQueueView() {
-  const { role } = useAppState();
+  const { role,setView } = useAppState();
   const [data, setData] = useState<CompanyQueueData | null>(null);
   const [page, setPage] = useState(1);
   const [refresh, setRefresh] = useState(0);
@@ -81,9 +83,9 @@ export function CompanyQueueView() {
               {row.campaignId && ['running', 'scheduled', 'paused'].includes(row.campaignStatus ?? '') && <button type="button" disabled={Boolean(acting)}
                 onClick={() => void manage(`/queues/campaigns/${row.campaignId}/${row.campaignStatus === 'paused' ? 'resume' : 'pause'}`, row.id)}
                 className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-50">{row.campaignStatus === 'paused' ? 'Resume campaign' : 'Pause campaign'}</button>}
-              <button type="button" disabled={Boolean(acting)} onClick={() => {
+              {row.source==='follow_up'?<button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold" onClick={()=>setView('conversations')}>Manage in Conversations</button>:<button type="button" disabled={Boolean(acting)} onClick={() => {
                 if (window.confirm(`Cancel the waiting call to ${row.phone}?`)) void manage(row.source === 'phone_test' ? `/queues/phone-tests/${row.id}/cancel` : `/queues/tasks/${row.id}/cancel`, row.id);
-              }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50">Cancel task</button>
+              }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50">Cancel task</button>}
             </div></td>}
           </tr>)}</tbody>
         </table>

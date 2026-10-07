@@ -102,6 +102,12 @@ export interface VoiceAgent {
   voiceId: string;
   temperature: number;
   prompt: string;
+  inboundPrompt?: string;
+  outboundPrompt?: string;
+  inboundWelcomeMessage?: string;
+  outboundWelcomeMessage?: string;
+  previousSummaryCount?: number;
+  previousSummaryMaxChars?: number;
   interruptionSensitivity: number; // 0 to 1
   silenceTimeout: number; // in ms
   sttProvider: string;

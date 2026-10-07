@@ -131,7 +131,7 @@ const providerSource = fs.readFileSync(new URL('../src/voice/providers/provider-
 const uiSource = fs.readFileSync(new URL('../../Frontend/src/components/agent/AgentTabs.tsx', import.meta.url), 'utf8');
 assert.match(providerSource, /a\.id=\$1 AND a\.tenant_id=\$2 AND a\.workspace_id=\$3/u);
 for (const uiOwnedSetting of [
-  'prompt: agent.prompt',
+  'prompt: legacyPrompt',
   'newToolInputSchema', 'AgentKnowledgeDocumentsPanel',
 ]) assert.match(uiSource, new RegExp(uiOwnedSetting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
 assert.doesNotMatch(uiSource, /Context Namespace|Important Information Fields/u);

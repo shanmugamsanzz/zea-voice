@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { conversationScope,listConversations,getConversation,getConversationTranscript } from '../src/calls/conversation-view.service.js';
+import { requireRoles,requireScopes } from '../src/auth/auth.middleware.js';
+
+const auth={role:'COMPANY_USER',tenantId:'company-a',workspaceId:'workspace-a',userId:'user'};
+const filters={page:1,pageSize:2,followUpPage:1};
+assert.throws(()=>conversationScope(null),error=>error.statusCode===401);
+assert.throws(()=>conversationScope({...auth,role:'OTHER'}),error=>error.statusCode===403);
+assert.throws(()=>conversationScope({...auth,workspaceId:null}),error=>error.statusCode===403);
+assert.throws(()=>conversationScope(auth,'company-b'),error=>error.statusCode===403);
+assert.throws(()=>conversationScope({role:'SUPER_ADMIN'}),error=>error.statusCode===400);
+assert.deepEqual(conversationScope({role:'SUPER_ADMIN'},'company-b'),{tenantId:'company-b',workspaceId:null});
+await listConversations({role:'SUPER_ADMIN'}, {...filters,companyId:'company-b'}, {contextRunner:async operation=>operation({query:async(_sql,values)=>{
+  assert.equal(values[0],'company-b');assert.equal(values[1],null);
+  return {rows:[],rowCount:0};
+}})});
+const logs=[];
+const runner=async operation=>operation({query:async(sql,values)=>{
+  logs.push({sql,values});
+  assert.equal(values[0],'company-a');assert.equal(values[1],'workspace-a');
+  if(sql.includes('stats.call_count'))return {rowCount:3,rows:[{id:'one'},{id:'two'},{id:'next'}]};
+  if(sql.includes('SELECT cv.id'))return {rowCount:values[2]==='thread-a'?1:0,rows:values[2]==='thread-a'?[{id:'thread-a',phone:'+919000000000'}]:[]};
+  if(sql.includes('c.agent_name'))return {rowCount:3,rows:[{id:'call-a',summaryStatus:'failed'},{id:'call-b',summaryStatus:'completed',summary:'A later call.'},{id:'call-c'}]};
+  if(sql.includes('FROM scheduled_follow_up_tasks'))return {rowCount:1,rows:[{id:'pending',status:'scheduled'}]};
+  if(sql.includes('SELECT c.id'))return {rowCount:values[3]==='call-a'?1:0,rows:values[3]==='call-a'?[{id:'call-a'}]:[]};
+  if(sql.includes('FROM call_transcript_entries'))return {rowCount:1,rows:[{id:'utterance',speaker:'user',text:'Preserved caller transcript'}]};
+  assert.fail('Unexpected query');
+}});
+const dependencies={contextRunner:runner};
+assert.throws(()=>listConversations(auth,{...filters,companyId:'company-b'},dependencies),error=>error.statusCode===403);
+assert.equal(logs.length,0,'Cross-company override must fail before any database query');
+const list=await listConversations(auth,{...filters,search:'name'},dependencies);
+assert.equal(list.hasMore,true);assert.equal(list.items.length,2);
+assert.match(logs[0].sql,/c.workspace_id=\$2/);assert.match(logs[0].sql,/cv.tenant_id=\$1/);
+assert.deepEqual(logs[0].values.slice(2),['name',3,0]);
+const history=await getConversation(auth,'thread-a',filters,dependencies);
+assert.equal(history.calls.items.length,2);assert.equal(history.calls.hasMore,true);
+assert.equal(history.calls.items[0].summaryStatus,'failed');
+assert.equal(history.followUps.items[0].status,'scheduled');
+assert.match(logs.find(entry=>entry.sql.includes('c.agent_name')).sql,/ORDER BY c.started_at,c.id/);
+assert.match(logs.find(entry=>entry.sql.includes('FROM scheduled_follow_up_tasks')).sql,/t.workspace_id=\$2/);
+const transcript=await getConversationTranscript(auth,'thread-a','call-a',filters,dependencies);
+assert.equal(transcript.transcript.items[0].text,'Preserved caller transcript');
+assert.match(logs.at(-1).sql,/t.is_final=true/);
+assert.doesNotMatch(logs.at(-1).sql,/sources|provider_metadata|credential|processing_token/);
+const before=logs.length;
+await assert.rejects(getConversation(auth,'thread-b',filters,dependencies),error=>error.statusCode===404);
+assert.equal(logs.length,before+1);
+await assert.rejects(getConversationTranscript(auth,'thread-a','foreign-call',filters,dependencies),error=>error.statusCode===404);
+assert.ok(!logs.at(-1).sql.includes('FROM call_transcript_entries'));
+for(const role of ['COMPANY_USER','COMPANY_DEVELOPER','SUPER_ADMIN']){
+  let error;
+  requireRoles('COMPANY_USER','COMPANY_DEVELOPER','SUPER_ADMIN')({auth:{role}},null,value=>{error=value;});
+  assert.equal(error,undefined);
+}
+let scopeError;
+requireScopes('calls:read')({auth:{authType:'api_key',scopes:['agents:read']}},null,error=>{scopeError=error;});
+assert.equal(scopeError.statusCode,403);
+const routes=await readFile(new URL('../src/calls/conversation.routes.js',import.meta.url),'utf8');
+assert.match(routes,/requireTenantContext/);assert.match(routes,/requireRoles\('SUPER_ADMIN'\)/);
+assert.match(routes,/router.post\([^\n]+requireRoles\('SUPER_ADMIN','COMPANY_DEVELOPER'\),requireSessionAuthentication/);
+assert.doesNotMatch(routes,/router\.(patch|delete|put)\(/);
+console.log('PASS Conversation view: role/scope checks, tenant/workspace SQL, unrelated-call denial before transcript access, chronological pagination, failed-summary transcript access and pending follow-ups');

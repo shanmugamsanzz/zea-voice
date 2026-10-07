@@ -154,6 +154,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
     { name: 'Credits Manager', viewId: 'credits', icon: Coins },
     { name: 'Queue Monitor', viewId: 'queue-monitor', icon: Activity },
     { name: 'Call Monitoring', viewId: 'call-monitoring', icon: Tv },
+    { name: 'Conversations', viewId: 'conversations', icon: MessageSquare },
     { name: 'Payments', viewId: 'payments', icon: CreditCard },
     { name: 'Settings', viewId: 'settings', icon: Settings },
   ];
@@ -172,6 +173,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       items: [
         { name: 'Campaigns', viewId: 'campaigns', icon: Megaphone },
         { name: 'Call Queue', viewId: 'queue-monitor', icon: Activity },
+        { name: 'Conversations', viewId: 'conversations', icon: MessageSquare },
         { name: 'Agents', viewId: 'agents', icon: Bot },
         { name: 'Reports', viewId: 'reports', icon: FileSpreadsheet },
         { name: 'VQA Voice', viewId: 'vqa-voice', icon: MessageSquare },
@@ -204,6 +206,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       case 'campaigns': return 'Campaigns';
       case 'agents': return 'Agents';
       case 'reports': return 'Reports';
+      case 'conversations': return 'Conversations';
       case 'vqa-voice': return 'VQA Voice';
       case 'call-logs': return 'Call Logs Analytics';
       case 'ai-insights': return 'AI Insights';
@@ -248,6 +251,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         return { title: 'Voice Operators', subtitle: 'Design prompt loops, listening filters, and neural outputs' };
       case 'reports':
         return { title: 'On-Demand Reports', subtitle: 'Filter transcript histories and export CSV/JSON digests' };
+      case 'conversations':
+        return { title: 'Conversations', subtitle: 'Contact call history, summaries and pending follow-ups' };
       case 'call-logs':
         return { title: 'Verbatim Logs', subtitle: 'Historical transcript logs and billing records' };
       case 'settings':

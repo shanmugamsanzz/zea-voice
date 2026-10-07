@@ -72,6 +72,8 @@ const envSchema = z.object({
   VOICE_COMPANY_DEFAULT_CONCURRENCY: z.coerce.number().int().min(1).max(10000).default(20),
   VOICE_CALL_OWNERSHIP_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
   VOICE_INBOUND_QUEUE_MAX_SIZE: z.coerce.number().int().min(1).max(10000).default(100),
+  VOICE_CONVERSATION_CONTINUITY_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  VOICE_CONVERSATION_CONTINUITY_TENANT_IDS: z.string().default(''),
   VOICE_COMPANY_QUEUE_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   PHONE_TEST_SHARE_ALLOWED_DIAL_CODES: z.string().default('91').refine(value => value.split(',').every(code => /^[1-9][0-9]{0,2}$/.test(code.trim())), 'Use comma-separated country dialing codes'),
   VOICE_COMPANY_QUEUE_TENANT_IDS: z.string().default('').refine(value => value.split(',').map(id => id.trim()).filter(Boolean).every(id => z.string().uuid().safeParse(id).success), 'Queue company allowlist must contain UUIDs'),

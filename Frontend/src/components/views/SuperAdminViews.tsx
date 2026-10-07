@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppState } from '../../store/AppState';
 import { TableActionsMenu } from '../common/TableActionsMenu';
+import { ConversationsView } from './ConversationsView';
 import { 
   MOCK_COMPANIES, 
   COMPLETED_CALL_LOGS 
@@ -227,6 +228,8 @@ export function SuperAdminViews() {
       return <CreditsManagerView />;
     case 'queue-monitor':
       return <QueueMonitorView />;
+    case 'conversations':
+      return <ConversationsView />;
     case 'call-monitoring':
       return <CallMonitoringView />;
     case 'payments':

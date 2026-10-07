@@ -36,13 +36,21 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
       throw new AppError(409, 'Company live-call concurrency is not configured.', 'COMPANY_CONCURRENCY_NOT_CONFIGURED');
     }
 
+    let followUpAgentId=null;
+    if(call.direction==='outbound' && call.capacityReservationId){
+      const selected=await client.query(`SELECT r.agent_id FROM agent_phone_test_requests r JOIN scheduled_follow_up_tasks t
+        ON t.id=r.follow_up_task_id AND t.tenant_id=r.tenant_id AND t.workspace_id=r.workspace_id
+        WHERE r.id=$1 AND r.tenant_id=$2 AND r.phone=$3 AND r.status IN ('dispatching','initiated')`,
+        [call.capacityReservationId,assignment.rows[0].tenant_id,call.to]);
+      followUpAgentId=selected.rows[0]?.agent_id??null;
+    }
     const agentResult = await client.query(
       `SELECT a.id, a.tenant_id, a.workspace_id, a.name, a.language, a.usage_direction,
           a.stt_model_id, a.llm_model_id, a.tts_model_id
          FROM voice_agents a
         WHERE a.phone_number_id=$1 AND a.tenant_id=$2
-          AND a.status='active' AND a.deleted_at IS NULL`,
-      [call.phoneNumberId, assignment.rows[0].tenant_id],
+          AND a.status='active' AND a.deleted_at IS NULL ${followUpAgentId?'AND a.id=$3':''}`,
+      [call.phoneNumberId, assignment.rows[0].tenant_id,...(followUpAgentId?[followUpAgentId]:[])],
     );
     if (!agentResult.rowCount) {
       throw new AppError(404, 'No active voice agent is mapped to the called number', 'VOICE_AGENT_NOT_FOUND');

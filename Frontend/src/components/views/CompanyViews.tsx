@@ -60,6 +60,7 @@ import { AgentLiveDataPanel } from '../agent/AgentLiveDataPanel';
 import { DeveloperReportsView } from '../reports/DeveloperReportsView';
 import { DeveloperVqaView } from '../vqa/DeveloperVqaView';
 import { CompanyQueueView } from './CompanyQueueView';
+import { ConversationsView } from './ConversationsView';
 import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
 import { DeveloperPhoneNumbersView } from '../phone-numbers/DeveloperPhoneNumbersView';
 import { DeveloperIntegrationsView } from '../integrations/DeveloperIntegrationsView';
@@ -131,6 +132,8 @@ export function CompanyViews() {
       return <CampaignsListView campaigns={campaigns} setCampaigns={setCampaigns} />;
     case 'queue-monitor':
       return <CompanyQueueView />;
+    case 'conversations':
+      return <ConversationsView />;
     case 'agents':
       return <AgentsListView agents={agents} setAgents={setAgents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
     case 'agents/create':

@@ -247,6 +247,7 @@ export async function finishAttempt(attemptId, outcome, details = {}, dependenci
       const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
       await finalizeCredit(client, { call: completedCall.rows[0], durationSeconds: duration });
     }
+    if(row.task_status==='canceled')return {action:'final',taskId:row.task_id,outcome:'canceled'};
     if (row.callback_origin_attempt_id === row.id && row.callback_scheduled_for
       && row.task_status === 'queued') {
       return {

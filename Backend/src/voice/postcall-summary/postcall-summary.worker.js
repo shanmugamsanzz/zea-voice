@@ -31,6 +31,8 @@ export async function startPostCallSummaryWorker(processor, dependencies = {}) {
       connection: dependencies.connection ?? connection,
       prefix: env.QUEUE_PREFIX,
       concurrency: env.POSTCALL_SUMMARY_WORKER_CONCURRENCY,
+      // Stalled-job recovery must not retry before the database claim expires.
+      lockDuration: env.POSTCALL_SUMMARY_TIMEOUT_MS + 60000,
     },
   );
   worker.on('failed', (job, error) => logger.error({

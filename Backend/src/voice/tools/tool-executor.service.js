@@ -1,6 +1,9 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { AppError } from '../../middleware/errors.js';
+import { updateContactTool, updateCallerContact } from './update-contact.service.js';
+import { manageFollowUpTool } from './manage-follow-up.service.js';
+import { manageLiveFollowUp } from '../../calls/follow-up.service.js';
 import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { validateToolArguments, validateToolHeaders, validateWebhookEndpoint } from './tool-security.js';
 
@@ -107,6 +110,23 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
   }
   const tool = (runtimeProfile.tools ?? []).find((candidate) => safeName(candidate.name) === safeName(toolCall.name));
   if (!tool) throw new AppError(409, `Requested tool is not assigned to this agent: ${toolCall.name}`, 'VOICE_TOOL_NOT_ASSIGNED');
+  if(tool.id===manageFollowUpTool.id&&tool.type===manageFollowUpTool.type){
+    if(!workflowAuthorized || dependencies.requireWorkflowAuthorization!==true || executionAuthorization.recordId!==manageFollowUpTool.id)
+      throw new AppError(403,'Follow-up action requires workflow authorization','FOLLOW_UP_NOT_AUTHORIZED');
+    validateToolArguments(toolCall.arguments??{},manageFollowUpTool.configuration.inputSchema);
+    const output=await manageLiveFollowUp(runtimeProfile,call,toolCall,{authorized:true,contextRunner:dependencies.followUpContextRunner});
+    return {id:toolCall.id??null,toolId:tool.id,name:tool.name,success:true,verified:true,output,durationMs:Math.round((performance.now()-startedAt)*100)/100};
+  }
+  if(tool.id===updateContactTool.id&&tool.type===updateContactTool.type) {
+    if(!workflowAuthorized||dependencies.requireWorkflowAuthorization!==true
+      ||executionAuthorization.recordId!==updateContactTool.id) {
+      throw new AppError(403,'Contact update requires runtime workflow authorization','CONTACT_UPDATE_NOT_AUTHORIZED');
+    }
+    validateToolArguments(toolCall.arguments??{},updateContactTool.configuration.inputSchema);
+    const output=await updateCallerContact(runtimeProfile,call,toolCall,{authorized:true,contextRunner:dependencies.contactContextRunner});
+    return {id:toolCall.id??null,toolId:tool.id,name:tool.name,success:true,verified:true,output,
+      durationMs:Math.round((performance.now()-startedAt)*100)/100};
+  }
   const config = await configuration(tool, dependencies);
   const argumentsValue = validateToolArguments(toolCall.arguments ?? {}, config.inputSchema);
   const fetchImpl = dependencies.fetchImpl ?? fetch;

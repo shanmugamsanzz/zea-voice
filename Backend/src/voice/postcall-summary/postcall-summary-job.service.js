@@ -2,6 +2,7 @@ import { withPlatformAdminContext } from '../../infrastructure/database-context.
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 import { calculateAndPersistUsageEventCosts } from '../../credits/usage-price-calculation.service.js';
+import { env } from '../../config/env.js';
 
 function map(row) {
   if (!row) return null;
@@ -14,6 +15,7 @@ function map(row) {
     providerId: row.provider_id,
     modelId: row.model_id,
     status: row.status,
+    processingToken: row.processing_token,
     instructions: row.instructions,
     includeTranscriptInWebhook: row.include_transcript_in_webhook,
     includeSummaryInWebhook: row.include_summary_in_webhook,
@@ -217,16 +219,27 @@ export function claimPostCallSummaryJob(summaryJobId, dependencies = {}) {
     const selected = await client.query('SELECT * FROM call_ai_summaries WHERE id=$1 FOR UPDATE', [summaryJobId]);
     if (!selected.rowCount) throw new AppError(404, 'Post-Call summary job was not found', 'POSTCALL_SUMMARY_JOB_NOT_FOUND');
     const current = selected.rows[0];
+    if (current.status === 'processing' && current.processing_started_at
+      && Date.now()-new Date(current.processing_started_at).getTime() < env.POSTCALL_SUMMARY_TIMEOUT_MS+60000) {
+      return { claimed: false, reason: 'already_processing', job: map(current) };
+    }
     if (['completed', 'skipped'].includes(current.status)) {
       return { claimed: false, reason: 'already_finalized', job: map(current) };
     }
     if (current.status === 'failed' || Number(current.attempt_count) >= Number(current.max_attempts)) {
+      if (current.status === 'processing') {
+        const exhausted = await client.query(`UPDATE call_ai_summaries
+          SET status='failed',failed_at=now(),error_code='POSTCALL_SUMMARY_ATTEMPTS_EXHAUSTED',
+            error_message='Summary worker stopped during the final allowed attempt'
+          WHERE id=$1 AND status='processing' RETURNING *`,[summaryJobId]);
+        return { claimed: false, reason: 'attempts_exhausted', job: map(exhausted.rows[0]) };
+      }
       return { claimed: false, reason: 'attempts_exhausted', job: map(current) };
     }
     const claimed = (await client.query(
       `UPDATE call_ai_summaries
           SET status='processing',attempt_count=attempt_count+1,
-              processing_started_at=now(),failed_at=NULL,error_code=NULL,error_message=NULL
+              processing_started_at=now(),processing_token=gen_random_uuid(),failed_at=NULL,error_code=NULL,error_message=NULL
         WHERE id=$1 AND status IN ('queued','processing') AND attempt_count<max_attempts
         RETURNING *`,
       [summaryJobId],
@@ -325,11 +338,12 @@ export function completePostCallSummaryJob(summaryJobId, result, dependencies = 
               collected_data=$6::jsonb,follow_up_required=$7,follow_up_reason=$8,
               usage=$9::jsonb,provider_request_id=$10,duration_ms=$11,
               completed_at=now(),failed_at=NULL,error_code=NULL,error_message=NULL
-        WHERE id=$1 AND status='processing'
+        WHERE id=$1 AND status='processing' AND processing_token=$12::uuid
         RETURNING *`,
       [summaryJobId, result.summary, result.outcome, result.customerIntent, result.sentiment,
         JSON.stringify(result.collectedData ?? {}), result.followUpRequired, result.followUpReason,
-        JSON.stringify(result.usage ?? {}), result.providerRequestId ?? null, result.durationMs ?? 0],
+        JSON.stringify(result.usage ?? {}), result.providerRequestId ?? null, result.durationMs ?? 0,
+        dependencies.processingToken ?? null],
     );
     if (!updated.rowCount) throw new AppError(409, 'Summary job is not processing', 'POSTCALL_SUMMARY_NOT_PROCESSING');
     // The summary runs after call completion, so it cannot be included in the
@@ -368,8 +382,8 @@ export function skipPostCallSummaryJob(summaryJobId, reason, dependencies = {}) 
     const updated = await client.query(
       `UPDATE call_ai_summaries
           SET status='skipped',error_code=$2,error_message=$3,completed_at=now(),failed_at=NULL
-        WHERE id=$1 AND status='processing' RETURNING *`,
-      [summaryJobId, reason.code, String(reason.message ?? '').slice(0, 2000)],
+        WHERE id=$1 AND status='processing' AND processing_token=$4::uuid RETURNING *`,
+      [summaryJobId, reason.code, String(reason.message ?? '').slice(0, 2000), dependencies.processingToken ?? null],
     );
     if (!updated.rowCount) throw new AppError(409, 'Summary job is not processing', 'POSTCALL_SUMMARY_NOT_PROCESSING');
     return map(updated.rows[0]);
@@ -388,9 +402,10 @@ export function failPostCallSummaryJob(summaryJobId, error, options = {}, depend
           SET status=$2::postcall_summary_status,error_code=$3,error_message=$4,
               failed_at=CASE WHEN $2='failed' THEN now() ELSE NULL END,
               processing_started_at=CASE WHEN $2='queued' THEN NULL ELSE processing_started_at END
-        WHERE id=$1 AND status='processing' RETURNING *`,
+        WHERE id=$1 AND status='processing' AND processing_token=$5::uuid RETURNING *`,
       [summaryJobId, retry ? 'queued' : 'failed', String(error?.code ?? 'POSTCALL_SUMMARY_FAILED').slice(0, 160),
-        String(error?.message ?? error ?? 'Post-Call summarization failed').slice(0, 2000)],
+        String(error?.message ?? error ?? 'Post-Call summarization failed').slice(0, 2000),
+        dependencies.processingToken ?? null],
     );
     if (!updated.rowCount) throw new AppError(409, 'Summary job is not processing', 'POSTCALL_SUMMARY_NOT_PROCESSING');
     return { retry, job: map(updated.rows[0]) };

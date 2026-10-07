@@ -11,6 +11,7 @@ export async function assertOutboundQueueSpace(client, tenantId, count) {
   const queued = await client.query(`SELECT count(*)::int count FROM (
     SELECT id FROM campaign_tasks WHERE tenant_id=$1 AND status='queued' AND archived_at IS NULL
     UNION ALL SELECT id FROM agent_phone_test_requests WHERE tenant_id=$1 AND status='queued'
+    UNION ALL SELECT id FROM scheduled_follow_up_tasks WHERE tenant_id=$1 AND status='scheduled' AND campaign_task_id IS NULL
   ) waiting`, [tenantId]);
   const maximum = Number(limits.rows[0].max_outbound_queued_tasks);
   const available = Math.max(0, maximum - Number(queued.rows[0].count));

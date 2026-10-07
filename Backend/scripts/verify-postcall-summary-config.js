@@ -55,6 +55,8 @@ await validateAgentRuntimeModels({
       model_id: values[0], model_key: `${type}-model`, model_settings: {}, model_capabilities: {},
       provider_settings: {}, provider_id: `${type}-provider`, provider_name: `test-${type}`,
       provider_slug: `test-${type}`,
+      provider_status: 'connected',
+      runtime_connection_type: {stt:'sarvam',llm:'openai',tts:'cartesia'}[type],
     }] };
   },
 }, {
@@ -77,6 +79,8 @@ await assert.rejects(validateAgentRuntimeModels({
       model_id: values[0], model_key: `${type}-model`, model_settings: {}, model_capabilities: {},
       provider_settings: {}, provider_id: `${type}-provider`, provider_name: `test-${type}`,
       provider_slug: `test-${type}`,
+      provider_status: 'connected',
+      runtime_connection_type: {stt:'sarvam',llm:'openai',tts:'cartesia'}[type],
     }] };
   },
 }, {

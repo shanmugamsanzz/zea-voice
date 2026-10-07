@@ -105,10 +105,11 @@ export async function executePostCallSummaryJob(summaryJobId, attemptContext = {
   const claimed = await claim(summaryJobId, dependencies.jobServiceDependencies);
   if (!claimed.claimed) return { processed: false, reason: claimed.reason, job: claimed.job };
   const job = claimed.job;
+  const jobServiceDependencies = { ...dependencies.jobServiceDependencies, processingToken: job.processingToken };
   if (!job.transcript.length) {
     const skipped = await skip(summaryJobId, {
       code: 'POSTCALL_SUMMARY_TRANSCRIPT_EMPTY', message: 'Call has no final transcript to summarize',
-    }, dependencies.jobServiceDependencies);
+    }, jobServiceDependencies);
     const delivery = await deliverFinalWebhook(job, postCallPayload(job, {
       reason: 'transcript_empty',
     }, {}, 'skipped'), dependencies);
@@ -154,7 +155,7 @@ export async function executePostCallSummaryJob(summaryJobId, attemptContext = {
       usage: summaryUsage,
       providerRequestId,
       durationMs,
-    }, dependencies.jobServiceDependencies);
+    }, jobServiceDependencies);
     const delivery = await deliverFinalWebhook(
       job, postCallPayload(job, structured, summaryUsage), dependencies,
     );
@@ -167,7 +168,16 @@ export async function executePostCallSummaryJob(summaryJobId, attemptContext = {
     }, 'Post-Call AI summary completed');
     return { processed: true, status: 'completed', job: delivery.persisted ?? completed, webhook: delivery.webhook };
   } catch (error) {
-    const failure = await fail(summaryJobId, error, { retryable: retryable(error) }, dependencies.jobServiceDependencies);
+    // A recovered worker owns a different token. A stale worker must not change
+    // its status, add billing events or send a completion webhook.
+    if (error?.code === 'POSTCALL_SUMMARY_NOT_PROCESSING') return { processed: false, reason: 'claim_lost' };
+    let failure;
+    try {
+      failure = await fail(summaryJobId, error, { retryable: retryable(error) }, jobServiceDependencies);
+    } catch (failureError) {
+      if (failureError?.code === 'POSTCALL_SUMMARY_NOT_PROCESSING') return { processed: false, reason: 'claim_lost' };
+      throw failureError;
+    }
     logger[failure.retry ? 'warn' : 'error']({
       err: error, stage: failure.retry ? 'postcall_summary.retry_queued' : 'postcall_summary.failed',
       summaryJobId, callId: job.callSessionId, tenantId: job.tenantId,

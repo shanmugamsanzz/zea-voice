@@ -7,7 +7,8 @@ import { outboundReservationTtlSeconds } from '../voice/call-capacity.service.js
 import { assertOutboundQueueSpace } from '../queues/outbound-queue-capacity.service.js';
 import { loadPhoneTestAccount, dialPhoneTest } from './agent-phone-test.service.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
-import { requireCompanyCallQueueEnabled } from '../queues/company-queue-feature.js';
+import { requireCompanyCallQueueEnabled,isCompanyCallQueueEnabled } from '../queues/company-queue-feature.js';
+import { isConversationContinuityEnabled } from '../calls/conversation-feature.js';
 
 const runFor = deps => deps.contextRunner ?? withPlatformAdminContext;
 const ownershipFor = deps => deps.ownership ?? voiceCallOwnership;
@@ -15,10 +16,10 @@ function response(row) {
   return { id: row.id, requestId: row.provider_request_id ?? null, phone: row.phone,
     agentId: row.agent_id, status: row.status, reason: row.queue_reason, error: row.last_error ?? null };
 }
-async function reserve(auth, agentId, phone, id, account, deps) {
+async function reserve(auth, agentId, phone, id, account, deps, followUp=false) {
   await ownershipFor(deps).acquire({ tenantId: auth.tenantId, providerCallId: id,
     limit: account.max_total_concurrency, ttlSeconds: outboundReservationTtlSeconds,
-    metadata: { phone, agentId, agentName: account.name, direction: 'outbound', source: 'phone_test' } });
+    metadata: { phone, agentId, agentName: account.name, direction: 'outbound', source: followUp?'follow_up':'phone_test' } });
 }
 const waitable = error => ['VOICE_COMPANY_CONCURRENCY_LIMIT','VOICE_COORDINATION_UNAVAILABLE'].includes(error.code);
 
@@ -102,6 +103,18 @@ export async function processQueuedPhoneTest(id, deps = {}) {
       const result = await client.query("SELECT * FROM agent_phone_test_requests WHERE id=$1 AND tenant_id=$2 FOR UPDATE", [id, tenantId]);
       const row = result.rows[0];
       if (!row || row.status !== 'queued') return null;
+      if(row.follow_up_task_id){
+        if(!(deps.featureEnabled??isConversationContinuityEnabled)(tenantId)){await client.query("UPDATE agent_phone_test_requests SET queue_reason='queue_disabled',updated_at=now() WHERE id=$1",[id]);return null;}
+        if(!(deps.queueEnabled??isCompanyCallQueueEnabled)(tenantId)){await client.query("UPDATE agent_phone_test_requests SET queue_reason='queue_disabled',updated_at=now() WHERE id=$1",[id]);return null;}
+        const active=await client.query(`SELECT 1 FROM scheduled_follow_up_tasks t JOIN conversation_call_links l
+          ON l.tenant_id=t.tenant_id AND l.conversation_id=t.conversation_id
+          JOIN call_sessions c ON c.id=l.call_session_id AND c.tenant_id=l.tenant_id
+          WHERE t.id=$1 AND c.ended_at IS NULL AND c.status IN ('ringing','connected') LIMIT 1`,[row.follow_up_task_id]);
+        const busy=active.rowCount?active:await client.query(`SELECT 1 FROM scheduled_follow_up_tasks current_task JOIN scheduled_follow_up_tasks other
+          ON other.tenant_id=current_task.tenant_id AND other.conversation_id=current_task.conversation_id AND other.id<>current_task.id
+          WHERE current_task.id=$1 AND other.status IN ('dispatching','initiated') LIMIT 1`,[row.follow_up_task_id]);
+        if(busy.rowCount){await client.query("UPDATE agent_phone_test_requests SET queue_reason='contact_active',updated_at=now() WHERE id=$1",[id]);return null;}
+      }
       const head = await client.query("SELECT id FROM agent_phone_test_requests WHERE tenant_id=$1 AND status='queued' ORDER BY created_at,id LIMIT 1", [tenantId]);
       if (head.rows[0]?.id !== id) return null;
       const auth = { userId: row.created_by, tenantId, workspaceId: row.workspace_id };
@@ -124,7 +137,7 @@ export async function processQueuedPhoneTest(id, deps = {}) {
         }
         throw error;
       }
-      try { await reserve(auth, row.agent_id, row.phone, id, account, deps); acquired = true; }
+      try { await reserve(auth, row.agent_id, row.phone, id, account, deps,Boolean(row.follow_up_task_id)); acquired = true; }
       catch (error) {
         if (!waitable(error)) throw error;
         await client.query('UPDATE agent_phone_test_requests SET queue_reason=$2,updated_at=now() WHERE id=$1',

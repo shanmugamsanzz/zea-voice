@@ -71,6 +71,7 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
   return {
     providerCallId: input.payload.CallUUID,
     capacityTenantId: account.tenant_id,
+    capacityReservationId: input.reservationId??null,
     from: input.payload.From,
     to: input.payload.To,
     direction,

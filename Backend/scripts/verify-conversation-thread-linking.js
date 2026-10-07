@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import { up, down } from '../migrations/1791372000000_continuous-conversation-linking.js';
+import { backfillConversationCallLinks } from '../src/calls/conversation-thread.service.js';
+
+const statements=[];
+await up({sql:value=>statements.push(value)});
+const sql=statements.join('\n');
+assert.match(sql,/SECURITY INVOKER/);
+assert.match(sql,/AFTER INSERT ON call_sessions/);
+assert.match(sql,/direction='inbound' THEN v_call.from_number/);
+assert.match(sql,/direction='outbound' THEN v_call.to_number/);
+assert.match(sql,/source'='browser_test' THEN RETURN NULL/);
+assert.match(sql,/ON CONFLICT\(tenant_id,phone_e164\)/);
+assert.match(sql,/ON CONFLICT\(tenant_id,contact_id\)/);
+assert.match(sql,/IF FOUND THEN RETURN v_existing.conversation_id/);
+assert.doesNotMatch(sql,/SET (?:display_name|name_source)|UPDATE call_sessions|call_transcript_entries|call_credit_charges|call_recordings/);
+const rollback=[];
+await down({sql:value=>rollback.push(value)});
+assert.doesNotMatch(rollback.join('\n'),/DROP TABLE|DELETE FROM/);
+
+const tenant='39bea399-9d85-42df-894d-66befc2dd170';
+const queries=[];
+const client={async query(text,values){
+  queries.push({text,values});
+  if(text.startsWith('SELECT c.id'))return {rows:[{id:'first'},{id:'second'}]};
+  return {rows:[{conversation_id:'same-thread'}]};
+}};
+assert.deepEqual(await backfillConversationCallLinks(client,{tenantId:tenant,limit:2}),{selected:2,linked:2});
+assert.deepEqual(queries[0].values,[tenant,2]);
+assert.match(queries[0].text,/c.tenant_id=\$1/);
+assert.match(queries[0].text,/NOT EXISTS/);
+assert.match(queries[0].text,/SKIP LOCKED/);
+assert.match(queries[0].text,/source',''\)<>'browser_test'/);
+assert.deepEqual(queries.slice(1).map(value=>value.values),[['first'],['second']]);
+const before=queries.length;
+await assert.rejects(backfillConversationCallLinks(client,{tenantId:'bad'}),/UUID/);
+await assert.rejects(backfillConversationCallLinks(client,{limit:1001}),/limit/);
+assert.equal(queries.length,before);
+assert.deepEqual(await backfillConversationCallLinks({query:async()=>({rows:[]})}),{selected:0,linked:0});
+console.log('PASS conversation linking SQL contract and bounded backfill fixtures');
+console.log('Live PostgreSQL trigger execution and concurrent inserts require staging verification.');

@@ -60,6 +60,9 @@ interface AgentApiData {
   llm: { modelId: string; providerName: string; modelName: string };
   tts: { modelId: string; providerName: string; modelName: string };
   voiceId: string; prompt: string; welcomeMessage: string | null; temperature: number;
+  inboundPrompt?: string; outboundPrompt?: string;
+  inboundWelcomeMessage?: string | null; outboundWelcomeMessage?: string | null;
+  previousSummaryCount?: number; previousSummaryMaxChars?: number;
   interruptionSensitivity: number; silenceTimeoutMs: number; inactivityTimeoutSeconds: number;
   settings: Record<string, unknown>; createdAt: string; updatedAt: string;
   metrics: { totalCalls: number; averageDurationSeconds: number; successRate: number };
@@ -261,6 +264,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       callbackMaximumDelayDays: base.callbackMaximumDelayDays ?? 30,
       callbackCloseAfterScheduling: base.callbackCloseAfterScheduling !== undefined ? base.callbackCloseAfterScheduling : true,
       welcomeMessage: base.welcomeMessage || '',
+      inboundPrompt: base.inboundPrompt ?? base.prompt ?? '',
+      outboundPrompt: base.outboundPrompt ?? base.prompt ?? '',
+      inboundWelcomeMessage: base.inboundWelcomeMessage ?? base.welcomeMessage ?? '',
+      outboundWelcomeMessage: base.outboundWelcomeMessage ?? base.welcomeMessage ?? '',
+      previousSummaryCount: base.previousSummaryCount ?? 2,
+      previousSummaryMaxChars: base.previousSummaryMaxChars ?? 6000,
       inactivityTimeout: base.inactivityTimeout !== undefined ? base.inactivityTimeout : 5,
       maxInactivityPrompts: base.maxInactivityPrompts ?? 1,
       silentMessage: base.silentMessage || "I can't hear you.Are you still on the call?",
@@ -327,6 +336,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       status: value.status, description: value.description ?? '', goal: value.goal ?? '', language: value.language,
       agentUsage: value.usageDirection,
       voiceId: value.voiceId, temperature: value.temperature, prompt: value.prompt,
+      inboundPrompt: value.inboundPrompt ?? value.prompt,
+      outboundPrompt: value.outboundPrompt ?? value.prompt,
+      inboundWelcomeMessage: value.inboundWelcomeMessage === undefined ? value.welcomeMessage ?? '' : value.inboundWelcomeMessage ?? '',
+      outboundWelcomeMessage: value.outboundWelcomeMessage === undefined ? value.welcomeMessage ?? '' : value.outboundWelcomeMessage ?? '',
+      previousSummaryCount: value.previousSummaryCount ?? 2,
+      previousSummaryMaxChars: value.previousSummaryMaxChars ?? 6000,
       interruptionSensitivity: value.interruptionSensitivity, silenceTimeout: value.silenceTimeoutMs,
       sttProvider: value.stt.providerName, sttModel: value.stt.modelName,
       llmProvider: value.llm.providerName, llmModel: value.llm.modelName,
@@ -460,11 +475,24 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   const saveAgent = async () => {
     if (isReadOnly || saving) return;
+    const directions = agent.agentUsage === 'inbound' ? ['inbound'] : agent.agentUsage === 'outbound' ? ['outbound'] : ['inbound', 'outbound'];
+    for (const direction of directions) {
+      const text = direction === 'inbound' ? agent.inboundPrompt : agent.outboundPrompt;
+      if (!text?.trim() || Array.from(text.trim()).length > Number(systemPromptMaxCharacters)) {
+        setActiveTab('brain'); setError(`Provide a ${direction} prompt within the system prompt character limit.`); return;
+      }
+    }
+    if (!Number.isInteger(agent.previousSummaryCount) || agent.previousSummaryCount! < 0 || agent.previousSummaryCount! > 10
+      || !Number.isInteger(agent.previousSummaryMaxChars) || agent.previousSummaryMaxChars! < 500 || agent.previousSummaryMaxChars! > 20000) {
+      setActiveTab('brain'); setError('Use 0–10 previous summaries and a total context limit of 500–20,000 characters.'); return;
+    }
     if (!Number.isInteger(systemPromptMaxCharacters) || Number(systemPromptMaxCharacters) <= 0) {
       setActiveTab('brain');
       setError('The System Prompt character limit could not be loaded. Refresh the page and try again.'); return;
     }
-    const systemPromptCharacterCount = Array.from(agent.prompt.trim()).length;
+    const legacyPrompt = (agent.agentUsage === 'outbound' ? agent.outboundPrompt : agent.inboundPrompt) || agent.prompt;
+    const legacyWelcome = agent.agentUsage === 'outbound' ? agent.outboundWelcomeMessage : agent.inboundWelcomeMessage;
+    const systemPromptCharacterCount = Array.from(legacyPrompt.trim()).length;
     if (systemPromptCharacterCount > Number(systemPromptMaxCharacters)) {
       setActiveTab('brain');
       setError(`System Prompt cannot exceed ${Number(systemPromptMaxCharacters).toLocaleString()} characters. Current: ${systemPromptCharacterCount.toLocaleString()}.`); return;
@@ -575,7 +603,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
         language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
         phoneNumberId: phoneNumberId || null, sttModelId, llmModelId, ttsModelId,
-        voiceId: agent.voiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
+        voiceId: agent.voiceId, prompt: legacyPrompt, welcomeMessage: legacyWelcome || null,
+        inboundPrompt: agent.inboundPrompt?.trim() || legacyPrompt,
+        outboundPrompt: agent.outboundPrompt?.trim() || legacyPrompt,
+        inboundWelcomeMessage: agent.inboundWelcomeMessage || null,
+        outboundWelcomeMessage: agent.outboundWelcomeMessage || null,
+        previousSummaryCount: agent.previousSummaryCount,
+        previousSummaryMaxChars: agent.previousSummaryMaxChars,
         temperature: agent.temperature, interruptionSensitivity: agent.interruptionSensitivity,
         silenceTimeoutMs: agent.silenceTimeout, inactivityTimeoutSeconds: agent.inactivityTimeout ?? 5,
         settings: agentSettings,
@@ -1688,11 +1722,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </div>
                     <div>
                       <h3 className="text-sm font-extrabold text-slate-800">Customer Callback</h3>
-                      <p className="text-xs font-semibold text-slate-500">Handle explicit callback requests during outbound campaigns.</p>
+                      <p className="text-xs font-semibold text-slate-500">Handle explicit callback and reminder requests during phone calls. This agent needs outbound usage enabled to place follow-ups.</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span className="zea-callback-badge-outbound rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-700">Outbound campaigns</span>
+                        <span className="zea-callback-badge-outbound rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-700">Inbound + outbound</span>
                         <span className="zea-callback-badge-detection rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-emerald-800">Code + LLM detection</span>
-                        <span className="zea-callback-badge-retry rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-800">Uses one retry</span>
+                        <span className="zea-callback-badge-retry rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-800">Campaign requests use one retry</span>
                       </div>
                     </div>
                   </div>
@@ -1741,17 +1775,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">Welcome Message</h4>
               </div>
 
-              {/* Purple input buffer header */}
-              <div className="rounded-xl overflow-hidden border border-violet-100">
-                <textarea
-                  rows={3}
-                  value={agent.welcomeMessage || ''}
-                  disabled={isReadOnly}
-                  onChange={(e) => setAgent({ ...agent, welcomeMessage: e.target.value })}
-                  className="w-full bg-white p-4 text-xs font-semibold text-slate-800 outline-none resize-y transition focus:ring-1 focus:ring-[#dfa822]/30"
-                  placeholder="Welcome sentence when user joins the call..."
-                />
-              </div>
+              {(['inbound', 'outbound'] as const).filter(direction => !agent.agentUsage || agent.agentUsage === 'both' || agent.agentUsage === direction).map(direction => {
+                const field = direction === 'inbound' ? 'inboundWelcomeMessage' : 'outboundWelcomeMessage';
+                return <label key={direction} className="block text-xs font-semibold capitalize">{direction} welcome message
+                  <textarea rows={3} maxLength={10000} value={agent[field] ?? ''} disabled={isReadOnly}
+                    onChange={event => setAgent({ ...agent, [field]: event.target.value,
+                      ...((agent.agentUsage === 'outbound' ? direction === 'outbound' : direction === 'inbound') ? { welcomeMessage: event.target.value } : {}) })}
+                    className="mt-2 w-full rounded-xl border border-slate-200 p-4 text-xs" placeholder="Optional opening message" />
+                </label>;
+              })}
             </div>
 
             {/* Silent Message Section */}
@@ -1816,28 +1848,30 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">System Prompt / Instructions</h4>
               </div>
 
-              {/* Terminal code header style */}
-              <div className="zea-core-directive-editor rounded-xl overflow-hidden border border-slate-200 shadow-sm">
-                <div className="zea-core-directive-header bg-[#f8fafc] px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <span className="text-xs font-extrabold text-slate-500 font-mono">CORE_DIRECTIVE.PY</span>
-                </div>
-                <textarea
-                  rows={10}
-                  value={agent.prompt}
-                  disabled={isReadOnly}
-                  aria-invalid={Boolean(promptLimitError)}
-                  onChange={(e) => setAgent({ ...agent, prompt: e.target.value })}
-                  className={`w-full bg-slate-950 p-5 text-xs text-[#38bdf8] font-mono leading-relaxed outline-none resize-y ${promptLimitError ? 'ring-2 ring-inset ring-red-500' : ''}`}
-                  placeholder="Define the core system instructions and guidelines for your AI voice agent here..."
-                />
-              </div>
-              <div className="flex items-start justify-between gap-4 text-[11px] font-semibold">
-                <p className={promptLimitError ? 'text-red-600' : 'text-slate-500'}>
-                  {promptLimitError || 'The maximum is loaded from the backend runtime configuration.'}
-                </p>
-                <span className={promptLimitError ? 'shrink-0 text-red-600' : 'shrink-0 text-slate-500'}>
-                  {promptCharacterCount.toLocaleString()} / {systemPromptMaxCharacters?.toLocaleString() ?? '...'} characters
-                </span>
+              {(['inbound', 'outbound'] as const).filter(direction => !agent.agentUsage || agent.agentUsage === 'both' || agent.agentUsage === direction).map(direction => {
+                const field = direction === 'inbound' ? 'inboundPrompt' : 'outboundPrompt';
+                const count = Array.from(agent[field] ?? '').length;
+                return <label key={direction} className="block text-xs font-semibold capitalize">{direction} system prompt
+                  <textarea rows={10} value={agent[field] ?? ''} disabled={isReadOnly}
+                    aria-invalid={systemPromptMaxCharacters !== null && count > systemPromptMaxCharacters}
+                    onChange={event => setAgent({ ...agent, [field]: event.target.value,
+                      ...((agent.agentUsage === 'outbound' ? direction === 'outbound' : direction === 'inbound') ? { prompt: event.target.value } : {}) })}
+                    className="mt-2 w-full rounded-xl bg-slate-950 p-5 text-xs font-mono text-sky-400" />
+                  <span className="mt-1 block text-slate-500">{count.toLocaleString()} / {systemPromptMaxCharacters?.toLocaleString() ?? '...'} characters</span>
+                </label>;
+              })}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="text-xs font-semibold">Previous call summaries to include
+                  <input type="number" min={0} max={10} step={1} disabled={isReadOnly} value={agent.previousSummaryCount ?? 2}
+                    onChange={event => setAgent({ ...agent, previousSummaryCount: Number(event.target.value) })}
+                    className="mt-2 w-full rounded-xl border border-slate-200 p-3" />
+                  <span className="mt-1 block text-slate-500">0 disables previous-summary context.</span>
+                </label>
+                <label className="text-xs font-semibold">Total previous-summary context limit (characters)
+                  <input type="number" min={500} max={20000} step={1} disabled={isReadOnly} value={agent.previousSummaryMaxChars ?? 6000}
+                    onChange={event => setAgent({ ...agent, previousSummaryMaxChars: Number(event.target.value) })}
+                    className="mt-2 w-full rounded-xl border border-slate-200 p-3" />
+                </label>
               </div>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { agentConversationConfiguration, saveAgentConversationConfiguration } from './agent-conversation-configuration.js';
 import { validateRecoveryReadiness } from '../voice/interaction/recovery-readiness.js';
 import { providerAdapterRegistry } from '../voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../voice/providers/defaults.js';
@@ -84,6 +85,7 @@ function map(row) { return { id: row.id, tenantId: row.tenant_id, workspaceId: r
   llm: { modelId: row.llm_model_id, providerName: row.llm_provider_name, modelName: row.llm_model_name },
   tts: { modelId: row.tts_model_id, providerName: row.tts_provider_name, modelName: row.tts_model_name },
   voiceId: row.voice_id, prompt: row.prompt, welcomeMessage: row.welcome_message,
+  ...agentConversationConfiguration({}, row),
   temperature: Number(row.temperature), interruptionSensitivity: Number(row.interruption_sensitivity),
   silenceTimeoutMs: row.silence_timeout_ms, inactivityTimeoutSeconds: row.inactivity_timeout_seconds,
   settings: withoutAgentTtsProviderOverrides(row.settings),
@@ -182,6 +184,7 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
     [auth.tenantId,auth.workspaceId,input.name,input.description??null,input.goal??null,input.language,input.usageDirection,input.status,input.phoneNumberId??null,
       input.sttModelId,input.llmModelId,input.ttsModelId,input.voiceId,input.prompt,input.welcomeMessage??null,input.temperature,
       input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(settings),auth.userId])).rows[0];
+    await saveAgentConversationConfiguration(client, auth.tenantId, created.id, input);
     await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,after_data)
       VALUES ($1,$2,$3,'user','VOICE_AGENT_CREATED','voice_agent',$4,$5::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,created.id,JSON.stringify({name:input.name,status:input.status})]);
     return map(await agentRow(client, auth.tenantId, created.id));
@@ -209,6 +212,7 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
       value.sttModelId,value.llmModelId,value.ttsModelId,value.voiceId,value.prompt,value.welcomeMessage,value.temperature,value.interruptionSensitivity,
       value.silenceTimeoutMs,value.inactivityTimeoutSeconds,JSON.stringify(value.settings),auth.userId]);
   } catch(error) { if(error.code==='23505') throw new AppError(409,'Agent name or phone mapping already exists','AGENT_CONFLICT'); throw error; }
+  await saveAgentConversationConfiguration(client, auth.tenantId, id, input, before);
   await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,before_data,after_data)
     VALUES ($1,$2,$3,'user','VOICE_AGENT_UPDATED','voice_agent',$4,$5::jsonb,$6::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,id,
       JSON.stringify({name:before.name,status:before.status}),JSON.stringify({name:value.name,status:value.status})]);

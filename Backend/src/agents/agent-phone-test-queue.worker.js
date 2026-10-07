@@ -2,6 +2,7 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { processQueuedPhoneTest } from './agent-phone-test-queue.service.js';
+import { enqueueDueFollowUps, recoverCampaignFollowUps } from '../calls/follow-up-dispatch.service.js';
 
 let timer, running;
 let afterTenantId = null;
@@ -10,6 +11,8 @@ export function startPhoneTestQueueWorker() {
   const tick = async () => {
     if (running) return;
     running = (async () => {
+      await enqueueDueFollowUps();
+      await recoverCampaignFollowUps().catch(error=>logger.warn({err:error},'Campaign follow-up delivery recovery deferred'));
       const requests = await withPlatformAdminContext(null, async client => {
         // Dispatch outcome after a crash is ambiguous. Never redial it.
         await client.query(`UPDATE agent_phone_test_requests SET status='failed',last_error='PHONE_TEST_DISPATCH_UNCONFIRMED',updated_at=now()

@@ -6,4 +6,5 @@ dist/
 *.log
 coverage/
 reports/call-queue-release.json
+reports/conversation-release.json
 .DS_Store

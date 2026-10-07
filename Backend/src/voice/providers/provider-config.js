@@ -8,6 +8,7 @@ import { resolveLiveMemoryConfiguration } from '../interaction/live-memory-confi
 import { resolveInterruptionConfiguration } from '../interruption/interruption-config.js';
 import { normalizeTtsUsageLimitSettings } from '../tts-usage-limit-config.js';
 import { isRuntimeConnectionLiveEligible } from '../../providers/runtime-connection-types.js';
+import { selectDirectionalInstructions } from '../conversation-opening.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
 
@@ -100,6 +101,9 @@ export function buildCanonicalRuntimeConfiguration({
   const interaction = resolveInteractionConfiguration(settings);
   const memory = resolveLiveMemoryConfiguration(settings);
   const interruption = resolveInterruptionConfiguration(settings, Number(row.interruption_sensitivity));
+  const direction = selectDirectionalInstructions({prompt:row.prompt,welcomeMessage:row.welcome_message,
+    inboundPrompt:row.inbound_prompt,outboundPrompt:row.outbound_prompt,
+    inboundWelcomeMessage:row.inbound_welcome_message,outboundWelcomeMessage:row.outbound_welcome_message},resolvedAgent.callDirection);
   return Object.freeze({
     schemaVersion: 1,
     scope: Object.freeze({
@@ -110,8 +114,8 @@ export function buildCanonicalRuntimeConfiguration({
       callDirection: resolvedAgent.callDirection ?? null,
     }),
     prompt: Object.freeze({
-      system: row.prompt,
-      welcome: row.welcome_message ?? null,
+      system: direction.prompt,
+      welcome: direction.welcomeMessage ?? null,
       temperature: Number(row.temperature),
     }),
     memory: Object.freeze({
@@ -183,6 +187,8 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
       `SELECT a.id, a.tenant_id, a.workspace_id, a.phone_number_id, a.name, a.description, a.goal, a.language,
           w.timezone runtime_timezone,
           a.usage_direction, a.voice_id, a.prompt, a.welcome_message, a.temperature,
+          a.inbound_prompt,a.outbound_prompt,a.inbound_welcome_message,a.outbound_welcome_message,
+          a.previous_summary_count, a.previous_summary_max_chars,
           a.interruption_sensitivity, a.silence_timeout_ms, a.inactivity_timeout_seconds, a.settings,
           sm.id stt_model_id, sm.model_key stt_model_key, sm.display_name stt_model_name,
           sm.settings stt_model_settings, sm.capabilities stt_model_capabilities,
@@ -306,8 +312,16 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         usageDirection: row.usage_direction,
         callDirection: resolvedAgent.callDirection ?? null,
         voiceId: ttsRuntimeSettings.voiceId,
-        prompt: row.prompt,
-        welcomeMessage: row.welcome_message,
+        previousSummaryCount: row.previous_summary_count ?? 2,
+        previousSummaryMaxChars: row.previous_summary_max_chars ?? 6000,
+        legacyPrompt: row.prompt,
+        legacyWelcomeMessage: row.welcome_message,
+        inboundPrompt: row.inbound_prompt,
+        outboundPrompt: row.outbound_prompt,
+        inboundWelcomeMessage: row.inbound_welcome_message,
+        outboundWelcomeMessage: row.outbound_welcome_message,
+        prompt: configuration.prompt.system,
+        welcomeMessage: configuration.prompt.welcome,
         temperature: Number(row.temperature),
         interruptionSensitivity: Number(row.interruption_sensitivity),
         silenceTimeoutMs: row.silence_timeout_ms,

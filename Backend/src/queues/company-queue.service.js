@@ -47,6 +47,7 @@ export async function getCompanyQueue(auth, filters, dependencies = {}) {
       const count = await client.query(`SELECT count(*)::int count FROM (
         SELECT id FROM campaign_tasks WHERE tenant_id=$1 AND status='queued' AND archived_at IS NULL
         UNION ALL SELECT id FROM agent_phone_test_requests WHERE tenant_id=$1 AND status='queued'
+        UNION ALL SELECT id FROM scheduled_follow_up_tasks WHERE tenant_id=$1 AND status='scheduled' AND campaign_task_id IS NULL
       ) waiting`, [auth.tenantId]);
       const waiting = await client.query(`SELECT * FROM (SELECT t.id,t.lead_phone,t.source::text,t.queue_reason::text,t.scheduled_for,
         COALESCE((SELECT max(a.ended_at) FROM campaign_task_attempts a WHERE a.task_id=t.id),t.created_at) AS waiting_since,
@@ -55,10 +56,16 @@ export async function getCompanyQueue(auth, filters, dependencies = {}) {
         JOIN campaigns c ON c.id=t.campaign_id AND c.tenant_id=t.tenant_id
         JOIN voice_agents va ON va.id=t.agent_id AND va.tenant_id=t.tenant_id
         WHERE t.tenant_id=$1 AND t.status='queued' AND t.archived_at IS NULL
-        UNION ALL SELECT p.id,p.phone,'phone_test',p.queue_reason,NULL::timestamptz,p.created_at,
+        UNION ALL SELECT p.id,p.phone,CASE WHEN p.follow_up_task_id IS NOT NULL THEN 'follow_up' ELSE 'phone_test' END,p.queue_reason,NULL::timestamptz,p.created_at,
           p.agent_id,a.name,NULL::uuid,NULL::text,NULL::text,p.last_error,p.created_at
         FROM agent_phone_test_requests p JOIN voice_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id
-        WHERE p.tenant_id=$1 AND p.status='queued') waiting
+        WHERE p.tenant_id=$1 AND p.status='queued'
+        UNION ALL SELECT f.id,ct.phone_e164,'follow_up','scheduled',f.scheduled_for,f.created_at,
+          f.agent_id,va.name,NULL::uuid,NULL::text,NULL::text,f.last_error_code,f.created_at
+          FROM scheduled_follow_up_tasks f JOIN contact_conversations cv ON cv.id=f.conversation_id AND cv.tenant_id=f.tenant_id
+          JOIN conversation_contacts ct ON ct.id=cv.contact_id AND ct.tenant_id=cv.tenant_id
+          JOIN voice_agents va ON va.id=f.agent_id AND va.tenant_id=f.tenant_id
+          WHERE f.tenant_id=$1 AND f.status='scheduled' AND f.campaign_task_id IS NULL) waiting
         ORDER BY created_at,id LIMIT $2 OFFSET $3`, [auth.tenantId, filters.pageSize, offset]);
       return { limits: limits.rows[0], outboundCount: Number(count.rows[0].count), outbound: waiting.rows };
     }),

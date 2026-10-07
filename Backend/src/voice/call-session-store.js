@@ -72,6 +72,7 @@ export function createVoiceCallSession(input, dependencies = {}) {
           input.call.direction,
           JSON.stringify({
             source: 'plivo-answer',
+            ...(input.call.capacityReservationId?{capacityReservationId:input.call.capacityReservationId}:{}),
             preCall: { status: 'pending' },
             sttProviderId: input.runtimeProfile.providers.stt.providerId,
             sttModelId: input.runtimeProfile.providers.stt.modelId,

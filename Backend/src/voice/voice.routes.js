@@ -14,6 +14,7 @@ import { admitAnsweredCall } from './call-capacity.service.js';
 import { z } from 'zod';
 import { inboundCallQueue, buildInboundQueueXml, createHoldMusic } from './inbound-call-queue.service.js';
 import { shouldQueueInboundCall } from '../queues/company-queue-feature.js';
+import { bindFollowUpCall } from '../calls/follow-up-dispatch.service.js';
 
 export const voiceRouter = Router();
 
@@ -118,6 +119,7 @@ voiceRouter.post('/answer', async (request, response) => {
       reservationId: call.direction === 'outbound' ? reservationId : undefined,
     });
     let callSession = await createVoiceCallSession({ call, runtimeProfile });
+    if(reservationId)await bindFollowUpCall(reservationId,callSession);
     const existingPreCall = callSession.providerMetadata?.preCall;
     const preCallRequired = callSession.created || !existingPreCall || existingPreCall.status === 'pending';
     if (preCallRequired) {

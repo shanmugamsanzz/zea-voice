@@ -7,6 +7,7 @@ import { validateIncomingPlivoCall } from '../voice/plivo-answer.service.js';
 import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { plivoAnswerPayloadSchema } from '../voice/voice.schemas.js';
 import { inboundCallQueue } from '../voice/inbound-call-queue.service.js';
+import { finishValidatedFollowUp } from '../calls/follow-up-dispatch.service.js';
 
 const paramsSchema = z.object({ attemptId: z.string().uuid(), eventType: z.enum(['ring', 'hangup']) });
 const storedHangupQuerySchema = z.object({ attempt_id: z.string().uuid() });
@@ -43,6 +44,7 @@ plivoWebhookRouter.post('/hangup', async (req, res) => {
     if (!call.capacityTenantId || call.direction !== 'outbound') {
       throw new AppError(409, 'Outbound call company could not be resolved', 'VOICE_CALL_OWNERSHIP_CONFLICT');
     }
+    await finishValidatedFollowUp(reservationId,call,req.body??{});
     try {
       await voiceCallOwnership.releaseReservation({ tenantId: call.capacityTenantId, reservationId });
       await voiceCallOwnership.releaseValidated({ tenantId: call.capacityTenantId, providerCallId: call.providerCallId });
