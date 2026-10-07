@@ -12,6 +12,7 @@ import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { AmbienceManager } from './AmbienceManager';
 import { AgentKnowledgeDocumentsPanel } from './AgentKnowledgeDocumentsPanel';
 import { AgentLiveDataPanel } from './AgentLiveDataPanel';
+import { AgentPromptEditor } from './AgentPromptEditor';
 import { TableActionsMenu } from '../common/TableActionsMenu';
 import { 
   Bot, 
@@ -1848,18 +1849,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">System Prompt / Instructions</h4>
               </div>
 
-              {(['inbound', 'outbound'] as const).filter(direction => !agent.agentUsage || agent.agentUsage === 'both' || agent.agentUsage === direction).map(direction => {
-                const field = direction === 'inbound' ? 'inboundPrompt' : 'outboundPrompt';
-                const count = Array.from(agent[field] ?? '').length;
-                return <label key={direction} className="block text-xs font-semibold capitalize">{direction} system prompt
-                  <textarea rows={10} value={agent[field] ?? ''} disabled={isReadOnly}
-                    aria-invalid={systemPromptMaxCharacters !== null && count > systemPromptMaxCharacters}
-                    onChange={event => setAgent({ ...agent, [field]: event.target.value,
-                      ...((agent.agentUsage === 'outbound' ? direction === 'outbound' : direction === 'inbound') ? { prompt: event.target.value } : {}) })}
-                    className="mt-2 w-full rounded-xl bg-slate-950 p-5 text-xs font-mono text-sky-400" />
-                  <span className="mt-1 block text-slate-500">{count.toLocaleString()} / {systemPromptMaxCharacters?.toLocaleString() ?? '...'} characters</span>
-                </label>;
-              })}
+              <AgentPromptEditor usage={agent.agentUsage} inbound={agent.inboundPrompt ?? ''} outbound={agent.outboundPrompt ?? ''}
+                readOnly={isReadOnly} maximum={systemPromptMaxCharacters}
+                onChange={(direction, value) => setAgent({ ...agent, [direction === 'inbound' ? 'inboundPrompt' : 'outboundPrompt']: value,
+                  ...((agent.agentUsage === 'outbound' ? direction === 'outbound' : direction === 'inbound') ? { prompt: value } : {}) })} />
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="text-xs font-semibold">Previous call summaries to include
                   <input type="number" min={0} max={10} step={1} disabled={isReadOnly} value={agent.previousSummaryCount ?? 2}

@@ -581,8 +581,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         </header>
 
         {/* Content Area */}
-        <main ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
-          <div className="mx-auto w-full max-w-7xl flex-1 space-y-8">
+        <main ref={mainScrollRef} className={`flex min-h-0 flex-1 flex-col ${view === 'conversations' ? 'overflow-hidden' : 'overflow-y-auto'} overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6`}>
+          <div className={`mx-auto w-full max-w-7xl flex-1 ${view === 'conversations' ? 'flex min-h-0 flex-col gap-3 overflow-hidden' : 'space-y-8'}`}>
             {creditNotice && <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${creditNotice.creditStatus === 'exhausted' ? 'border-red-300 bg-red-50 text-red-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`} role="alert">
               {creditNotice.creditStatus === 'exhausted'
                 ? 'No call credits are available. New inbound and outbound calls are blocked. Contact Super Admin to add credits.'

@@ -14,6 +14,28 @@ const date = (value?: string) => value ? new Date(value).toLocaleString() : '—
 const label = (value?: string) => (value || 'unknown').replace(/_/g, ' ');
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Could not load conversations.';
 const button = 'rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold disabled:opacity-40';
+function CallSummary({ call, questions }: { call: Call; questions: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const text = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const element = text.current;
+    if (!element) return;
+    const measure = () => setOverflowing(element.scrollHeight > Number.parseFloat(getComputedStyle(element).lineHeight) * 5 + 1);
+    const observer = new ResizeObserver(measure);
+    observer.observe(element); measure();
+    return () => observer.disconnect();
+  }, [call.summary]);
+  return <>
+    <p className="mt-3 text-sm font-semibold">Outcome: {label(call.outcome)}</p>
+    <p id={`summary-${call.id}`} ref={text} className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${expanded ? '' : 'line-clamp-5'}`}>{call.summary}</p>
+    {(overflowing || questions || call.followUpRequired) && <button type="button" aria-expanded={expanded}
+      aria-controls={`summary-${call.id}`} onClick={() => setExpanded(value => !value)}
+      className="mt-2 text-sm font-bold text-emerald-700 hover:underline">{expanded ? 'Read less' : 'Read more'}</button>}
+    {expanded && <>{questions && <p className="mt-3 text-sm"><strong>Pending questions:</strong> {questions}</p>}
+      {call.followUpRequired && <p className="mt-2 text-sm"><strong>Follow-up noted:</strong> {call.followUpReason || 'See summary for details.'}</p>}</>}
+  </>;
+}
 function Pagination({ page, hasMore, onChange }: { page: number; hasMore: boolean; onChange: (value: number) => void }) {
   return <div className="mt-4 flex items-center justify-between gap-3"><button className={button} disabled={page === 1} onClick={() => onChange(page - 1)}>Previous</button><span className="text-sm">Page {page}</span><button className={button} disabled={!hasMore} onClick={() => onChange(page + 1)}>Next</button></div>;
 }
@@ -36,7 +58,7 @@ export function ConversationsView() {
   const admin = role === 'SUPER_ADMIN';
   const [companyId, setCompanyId] = useState('');
   const companies = useRead<Array<{ tenantId: string; businessName: string }>>(admin ? '/admin/companies/options' : null);
-  return <div className="space-y-5">
+  return <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
     <div><h2 className="text-2xl font-bold">Conversations</h2><p className="mt-1 text-sm text-slate-500">Contact history, call summaries and pending follow-ups.</p></div>
     {admin && <label className="block text-sm font-semibold">Company<select aria-label="Company" value={companyId} onChange={event => setCompanyId(event.target.value)} className="ml-3 rounded-lg border border-slate-200 bg-white p-3"><option value="">Select company</option>{companies.data?.map(company => <option key={company.tenantId} value={company.tenantId}>{company.businessName}</option>)}</select></label>}
     {companies.error && <p role="alert" className="text-red-700">{companies.error}</p>}
@@ -51,19 +73,22 @@ function ConversationBrowser({ base, companyId }: { base: string; companyId: str
   const [refresh, setRefresh] = useState(0);
   const company = companyId ? `&companyId=${encodeURIComponent(companyId)}` : '';
   const { data, error } = useRead<Page<Contact>>(`${base}?page=${page}&pageSize=25&search=${encodeURIComponent(query)}${company}`, refresh);
-  return <>
+  return <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
     <div className="flex flex-wrap gap-3"><form className="flex flex-1 gap-2" onSubmit={event => { event.preventDefault(); setQuery(search); setPage(1); }}><input aria-label="Search contacts" placeholder="Search name or phone number" maxLength={120} value={search} onChange={event => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-200 p-3" /><button className={button}>Search</button></form><button className={button} onClick={() => setRefresh(value => value + 1)}>Refresh</button></div>
-    <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-      <section aria-label="Contacts" className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,2fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:grid-cols-[280px_minmax(0,1fr)] md:grid-rows-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <section aria-label="Contacts" className="flex min-h-0 flex-col overflow-hidden border-b border-slate-200 md:border-b-0 md:border-r">
+        <h3 className="shrink-0 border-b border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold">Contacts</h3>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
         {error && <p role="alert" className="text-red-700">{error}</p>}
         {!data && !error && <p role="status">Loading contacts…</p>}
         {data?.items.map(contact => <button key={contact.id} onClick={() => setSelected(contact.id)} aria-pressed={selected === contact.id} className={`mb-2 w-full rounded-lg border p-3 text-left ${selected === contact.id ? 'border-amber-400 bg-amber-50' : 'border-slate-200'}`}><span className="block font-semibold">{contact.name || contact.phone}</span>{contact.name && <span className="block text-sm text-slate-500">{contact.phone}</span>}<span className="mt-1 block text-xs text-slate-500">{contact.callCount} calls · {date(contact.lastCallAt)}</span></button>)}
         {data && !data.items.length && <p className="text-sm text-slate-500">No conversations found.</p>}
-        {data && <Pagination page={page} hasMore={data.hasMore} onChange={setPage} />}
+        </div>
+        {data && <div className="shrink-0 border-t border-slate-100 p-3"><Pagination page={page} hasMore={data.hasMore} onChange={setPage} /></div>}
       </section>
       {selected ? <ConversationHistory key={selected} id={selected} base={base} company={company} refresh={refresh} /> : <p className="p-5 text-sm text-slate-500">Select a contact to view their call history.</p>}
     </div>
-  </>;
+  </div>;
 }
 function ConversationHistory({ id, base, company, refresh }: { id: string; base: string; company: string; refresh: number }) {
   const { role } = useAppState();
@@ -83,12 +108,13 @@ function ConversationHistory({ id, base, company, refresh }: { id: string; base:
       setChanged(value=>value+1);
     }catch(error){setActionError(errorMessage(error));}finally{setCanceling('');}
   };
-  return <section aria-label="Contact conversation" className="space-y-4">
+  return <section aria-label="Contact conversation" className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f0f2ed]">
     {error && <p role="alert" className="text-red-700">{error}</p>}
     {actionError && <p role="alert" className="text-red-700">{actionError}</p>}
     {!data && !error && <p role="status">Loading call history…</p>}
     {data && <>
-      <div><h3 className="text-xl font-bold">{data.contact.name || data.contact.phone}</h3>{data.contact.name && <p className="text-sm text-slate-500">{data.contact.phone}</p>}</div>
+      <div className="shrink-0 border-b border-slate-200 bg-white px-5 py-4"><h3 className="text-lg font-bold">{data.contact.name || data.contact.phone}</h3>{data.contact.name && <p className="text-sm text-slate-500">{data.contact.phone}</p>}</div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 md:p-5">
       <section className="rounded-xl border border-slate-200 bg-white p-4"><h4 className="font-bold">Pending follow-ups</h4>
         {!data.followUps.items.length && <p className="mt-2 text-sm text-slate-500">No pending follow-ups on this page.</p>}
         {data.followUps.items.map(task => <div key={task.id} className="mt-3 border-t border-slate-100 pt-3"><p className="font-semibold capitalize">{label(task.kind)} · {label(task.status)}</p><p className="whitespace-pre-wrap text-sm">{task.purpose}</p><p className="mt-1 text-xs text-slate-500">{date(task.scheduledFor)} · {task.agentName}</p>{['DEVELOPER','SUPER_ADMIN'].includes(role)&&['scheduled','queued'].includes(task.status)&&<button className={`${button} mt-2 text-red-700`} disabled={Boolean(canceling)} onClick={()=>void cancel(task)}>Cancel follow-up</button>}</div>)}
@@ -98,13 +124,14 @@ function ConversationHistory({ id, base, company, refresh }: { id: string; base:
       {data.calls.items.map(call => {
         const pending = call.collectedData?.pending_questions;
         const questions = Array.isArray(pending) ? pending.filter(item => typeof item === 'string').join('; ') : typeof pending === 'string' ? pending : '';
-        return <article key={call.id} className="rounded-xl border border-slate-200 bg-white p-5">
+        return <article key={call.id} className={`w-full rounded-xl border border-slate-200 p-4 shadow-sm lg:max-w-[90%] ${call.direction === 'outbound' ? 'ml-auto bg-[#e4f4df]' : 'mr-auto bg-white'}`}>
           <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold capitalize">{label(call.direction)} · {label(call.status)}</p><p className="mt-1 text-xs text-slate-500">{date(call.startedAt)} · {call.agentName} · {Math.floor(call.durationSeconds / 60)}m {call.durationSeconds % 60}s{call.campaignName ? ` · ${call.campaignName}` : ''}</p></div><button className={button} onClick={() => setCallId(call.id)}>View conversation</button></div>
-          {call.summaryStatus === 'completed' ? <><p className="mt-3 text-sm font-semibold">Outcome: {label(call.outcome)}</p><p className="mt-2 whitespace-pre-wrap text-sm">{call.summary}</p>{questions && <p className="mt-3 text-sm"><strong>Pending questions:</strong> {questions}</p>}{call.followUpRequired && <p className="mt-2 text-sm"><strong>Follow-up noted:</strong> {call.followUpReason || 'See summary for details.'}</p>}</> : <p className="mt-3 text-sm text-slate-500">Summary: {call.summaryStatus ? label(call.summaryStatus) : 'not available'}. The conversation remains available.</p>}
+          {call.summaryStatus === 'completed' ? <CallSummary call={call} questions={questions} /> : <p className="mt-3 text-sm text-slate-500">Summary: {call.summaryStatus ? label(call.summaryStatus) : 'not available'}. The conversation remains available.</p>}
         </article>;
       })}
       {!data.calls.items.length && <p className="text-sm text-slate-500">No calls on this page.</p>}
       <Pagination page={page} hasMore={data.calls.hasMore} onChange={setPage} />
+      </div>
     </>}
     {callId && <TranscriptDialog key={callId} path={`${base}/${id}/calls/${callId}/transcript`} company={company} onClose={() => setCallId(null)} />}
   </section>;
