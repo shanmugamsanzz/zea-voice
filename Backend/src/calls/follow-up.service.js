@@ -47,12 +47,15 @@ export async function cancelFollowUp(client,scope,id) {
 
 export async function manageLiveFollowUp(profile,call,toolCall,deps={}) {
   if(!deps.authorized)throw new AppError(403,'Follow-up action requires workflow authorization','FOLLOW_UP_NOT_AUTHORIZED');
-  const args=toolCall.arguments??{},evidence=clean(args.evidence),current=clean(toolCall.currentUserMessage);
+  const args=toolCall.arguments??{},current=clean(toolCall.currentUserMessage);
   const structuredRelative=args.delayMinutes!==undefined;
+  // The LLM supplies intent/duration; retain the actual runtime transcript
+  // for audit and idempotency without requiring it to reproduce that text.
+  const evidence=structuredRelative ? current : clean(args.evidence);
   if(structuredRelative && (args.action!=='schedule' || args.callerConfirmed!==true
     || typeof args.delayMinutes!=='number' || !Number.isFinite(args.delayMinutes) || args.delayMinutes<=0
     || args.localDate!==undefined || args.localTime!==undefined))return clarification('invalid_relative_request','Provide one structured duration for an explicitly requested callback, without absolute date/time fields.');
-  if(!evidence || !current.includes(evidence))return clarification('caller_evidence_required','Ask the caller to explicitly request or confirm this follow-up.');
+  if(!current || (!structuredRelative && (!evidence || !current.includes(evidence))))return clarification('caller_evidence_required','Ask the caller to explicitly request or confirm this follow-up.');
   if(!structuredRelative && args.action!=='cancel' && /(?:don't|do not|never).*call|cancel|(?:he|she|they) (?:said|asked|wants)|my (?:wife|husband|mother|father|friend) (?:said|asked|wants)|on behalf|call (?:him|her|them)|அவருக்கு|அவங்களுக்கு|வேண்டாம்|ரத்து/iu.test(current))
     return clarification('explicit_own_request_required','Clarify whether the current caller personally wants this follow-up on their own number.');
   const scope=profile.agent;

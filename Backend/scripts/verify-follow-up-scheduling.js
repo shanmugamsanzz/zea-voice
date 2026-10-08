@@ -101,6 +101,11 @@ const tamilScheduled=await manageLiveFollowUp(profile,call,tamilRequest,deps);
 assert.equal(tamilScheduled.scheduled,true);assert.equal(tasks.length,beforeRelative+1);
 assert.ok(Math.abs(new Date(tamilScheduled.requestedFor).getTime()-relativeStarted-120000)<2000);
 assert.equal((await manageLiveFollowUp(profile,call,tamilRequest,deps)).idempotent,true);
+const { evidence: omittedEvidence, ...withoutEvidence } = tamilRequest.arguments;
+assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:withoutEvidence},deps)).idempotent,true);
+assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:{...withoutEvidence,evidence:'A paraphrase, not a transcript quote'}},deps)).idempotent,true);
+assert.equal(tasks.length,beforeRelative+1);
+assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,currentUserMessage:''},deps)).scheduled,false);
 assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:{...tamilRequest.arguments,callerConfirmed:false}},deps)).scheduled,false);
 assert.equal((await manageLiveFollowUp(profile,call,{...tamilRequest,arguments:{...tamilRequest.arguments,delayMinutes:NaN}},deps)).scheduled,false);
 
