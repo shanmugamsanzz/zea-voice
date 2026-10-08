@@ -276,6 +276,8 @@ assert.doesNotMatch(workflowPrompt, /taskCompletion/u);
 assert.doesNotMatch(workflowPrompt, /Close briefly/u);
 
 let executedTools = 0;
+for (const callControl of ['continue', 'close']) {
+executedTools = 0;
 const executionResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'en',
   mainPrompt: workflowProfile.agent.prompt, maximumSpeechCharacters: 300,
@@ -287,7 +289,7 @@ const executionResult = await runTemplateEngineProductionTurn({
 }, {
   invokeStructuredLlm: async (request) => (
     request.responseFormat?.name === 'tool_result_response'
-      ? { answer: { speech: 'Your request was submitted successfully.' } }
+      ? { answer: { speech: 'Your request was submitted successfully.', callControl } }
       : { answer: {
         outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.',
         workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
@@ -310,6 +312,8 @@ assert.equal(executedTools, 1);
 assert.equal(executionResult.toolExecuted, true);
 assert.equal(executionResult.workflow.status, 'completed');
 assert.equal(executionResult.speech, 'Your request was submitted successfully.');
+assert.equal(executionResult.callControl, callControl === 'close' ? 'close' : null);
+}
 
 const correctedWorkflowResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'ta-IN',

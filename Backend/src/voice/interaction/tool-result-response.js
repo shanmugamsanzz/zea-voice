@@ -4,8 +4,11 @@ import { shortenCompleteSpeech } from './universal-response-safety.js';
 import { llmTokenBudgetForSpeech } from './template-engine-speech-budget.js';
 
 const toolResultResponseSchema = Object.freeze({
-  type: 'object', additionalProperties: false, required: ['speech'],
-  properties: Object.freeze({ speech: Object.freeze({ type: 'string' }) }),
+  type: 'object', additionalProperties: false, required: ['speech', 'callControl'],
+  properties: Object.freeze({
+    speech: Object.freeze({ type: 'string' }),
+    callControl: Object.freeze({ type: 'string', enum: Object.freeze(['continue', 'close']) }),
+  }),
 });
 
 function cleanText(value, maximum = 8_000) {
@@ -41,6 +44,7 @@ export async function runToolResultResponse({
         'An authorized tool has completed for the current caller request.',
         'Give one natural spoken answer using the tool result. Do not call another tool.',
         'Do not claim success, availability, sending, booking, or any fact that is not present in the tool result.',
+        'Choose callControl using the configured agent prompt and the actual tool result: continue to keep the conversation open, or close to end after your speech finishes playing. A closing sentence alone does not end the call. Do not invent a successful action to justify closing.',
         `Caller language: ${cleanText(language, 80) || 'Follow the caller language'}`,
         '<tool_call>', JSON.stringify(serializable({
           toolName: toolCall?.name, intent: toolCall?.intent, arguments: toolCall?.arguments,
@@ -63,5 +67,10 @@ export async function runToolResultResponse({
   const speech = shortenCompleteSpeech(parsed?.speech, maximumSpeechCharacters);
   if (!speech) throw new AppError(502, 'Tool result LLM returned empty speech',
     'TOOL_RESULT_LLM_EMPTY');
-  return Object.freeze({ speech, speechStreaming: completion?.speechStreaming ?? null });
+  // Older invokers without this field remain open; only an explicit valid
+  // model decision may close the call.
+  const callControl = parsed?.callControl ?? 'continue';
+  if (!['continue', 'close'].includes(callControl)) throw new AppError(502,
+    'Tool result LLM returned invalid call control', 'TOOL_RESULT_LLM_CALL_CONTROL_INVALID');
+  return Object.freeze({ speech, callControl, speechStreaming: completion?.speechStreaming ?? null });
 }

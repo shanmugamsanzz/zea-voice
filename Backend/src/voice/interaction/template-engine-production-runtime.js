@@ -343,7 +343,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     workflow: workflowResult.workflow,
     toolExecuted: workflowResult.toolExecuted,
     toolResult: workflowResult.toolResult,
-    callControl: universalTurn.outcome === 'CLOSING' ? 'close' : null,
+    callControl: toolResponse
+      ? (toolResponse.callControl === 'close' ? 'close' : null)
+      : (universalTurn.outcome === 'CLOSING' ? 'close' : null),
     provenance: responseProvenance(
       universalTurn.decision, universalTurn.evidenceIds, workflowResult.workflow,
     ),
