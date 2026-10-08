@@ -209,12 +209,22 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     responseFormat: Object.freeze({ type: 'json_schema', name: 'agent_qdrant_universal_turn',
       strict: true, schema: universalTurnSchema }),
   }), 'answer_generation');
+  // With authorized workflows, speech may be a pre-execution promise.
+  // Hold it until the action is validated; execution speaks its result only.
+  const pendingSpeech = [];
+  const holdSpeech = workflowDefinitions.length > 0;
   const completion = await invokeStructuredLlm(request, {
-    onSpeechSentence: input.onSpeechSentence,
+    onSpeechSentence: holdSpeech
+      ? (sentence, details) => { pendingSpeech.push([sentence, details]); }
+      : input.onSpeechSentence,
     cancellationSignal: input.cancellationSignal,
   });
   const validated = acceptDecision(completionValue(completion), retrieval.chunks,
     input.maximumSpeechCharacters, workflowDefinitions, input.conversationContext);
+  if (holdSpeech && validated.workflowAction?.action !== 'EXECUTE'
+    && !input.cancellationSignal?.aborted) {
+    for (const [sentence, details] of pendingSpeech) input.onSpeechSentence?.(sentence, details);
+  }
   const evidence = Object.freeze(retrieval.chunks.map((chunk) => evidenceRecord(
     chunk, retrieval.request.tenantId, retrieval.request.agentId,
   )));

@@ -278,6 +278,7 @@ assert.doesNotMatch(workflowPrompt, /Close briefly/u);
 let executedTools = 0;
 for (const callControl of ['continue', 'close']) {
 executedTools = 0;
+const playedSpeech = [];
 const executionResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'en',
   mainPrompt: workflowProfile.agent.prompt, maximumSpeechCharacters: 300,
@@ -287,7 +288,11 @@ const executionResult = await runTemplateEngineProductionTurn({
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [configuredTool],
   cancellationSignal,
 }, {
-  invokeStructuredLlm: async (request) => (
+  onSpeechSentence: sentence => playedSpeech.push(sentence),
+  invokeStructuredLlm: async (request, options) => {
+    options.onSpeechSentence?.(request.responseFormat?.name === 'tool_result_response'
+      ? 'Your request was submitted successfully.' : 'I will submit that now.', { final: true });
+    return (
     request.responseFormat?.name === 'tool_result_response'
       ? { answer: { speech: 'Your request was submitted successfully.', callControl } }
       : { answer: {
@@ -295,7 +300,8 @@ const executionResult = await runTemplateEngineProductionTurn({
         workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
           toolName: configuredTool.name, argumentsJson: '{}', authorizationQuote: 'Yes, submit it.' },
       } }
-  ),
+  );
+  },
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),
   runQdrantUniversalTurn: runAgentQdrantUniversalTurn,
@@ -313,6 +319,7 @@ assert.equal(executionResult.toolExecuted, true);
 assert.equal(executionResult.workflow.status, 'completed');
 assert.equal(executionResult.speech, 'Your request was submitted successfully.');
 assert.equal(executionResult.callControl, callControl === 'close' ? 'close' : null);
+assert.deepEqual(playedSpeech, ['Your request was submitted successfully.']);
 }
 
 const correctedWorkflowResult = await runTemplateEngineProductionTurn({
