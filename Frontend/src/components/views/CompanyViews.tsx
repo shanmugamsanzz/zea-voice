@@ -642,6 +642,9 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const [csvText, setCsvText] = useState('');
   const [batchCsvError, setBatchCsvError] = useState('');
   const batchCsvInputRef = useRef<HTMLInputElement>(null);
+  const batchCsvReadId = useRef(0);
+  const batchCsvReading = useRef(false);
+  const [readingBatchCsv, setReadingBatchCsv] = useState(false);
   
   const [batchCampName, setBatchCampName] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -737,14 +740,29 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const retryIntervalMilliseconds = () => retryInterval * (retryIntervalUnit === 'Days' ? 86_400_000 : retryIntervalUnit === 'Hours' ? 3_600_000 : 60_000);
   const optionalIsoDate = (value: string) => value ? new Date(value).toISOString() : undefined;
 
+  const clearBatchCsv = () => {
+    batchCsvReadId.current += 1;
+    batchCsvReading.current = false;
+    setReadingBatchCsv(false);
+    setUploadedFile(null);
+    setCsvText('');
+    setSimulatedLeadsCount(0);
+    setBatchCsvError('');
+  };
+
   const loadBatchCsvFile = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || submittingCampaign) return;
+    clearBatchCsv();
+    const readId = batchCsvReadId.current;
     if (!file.name.toLowerCase().endsWith('.csv')) {
       setBatchCsvError('Please upload a valid CSV file.');
       return;
     }
+    batchCsvReading.current = true;
+    setReadingBatchCsv(true);
     try {
       const contents = await file.text();
+      if (readId !== batchCsvReadId.current) return;
       if (!contents.trim()) {
         setBatchCsvError('The selected CSV file is empty. Please upload a valid CSV file.');
         return;
@@ -755,24 +773,33 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
       if (!batchCampName) setBatchCampName(`${file.name.replace(/\.csv$/i, '').replace(/_/g, ' ')} Campaign`);
       showToast(`Loaded ${file.name}. The backend will validate every phone number and duplicate.`);
     } catch {
+      if (readId !== batchCsvReadId.current) return;
       setBatchCsvError('The selected CSV file could not be read. Please choose another CSV file.');
       showToast('The selected CSV file could not be read.');
+    } finally {
+      if (readId === batchCsvReadId.current) {
+        batchCsvReading.current = false;
+        setReadingBatchCsv(false);
+      }
     }
   };
 
   const handleCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    await loadBatchCsvFile(event.target.files?.[0]);
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    await loadBatchCsvFile(file);
   };
 
   const handleDownloadTemplate = () => {
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(new Blob(['name,phone,remarks\nJohn (USA),16501234567,Example USA number\n'], { type: 'text/csv' }));
+    link.href = URL.createObjectURL(new Blob(['name,phone,remarks\n'], { type: 'text/csv' }));
     link.download = 'zea-voice-batch-template.csv'; link.click(); URL.revokeObjectURL(link.href);
     showToast('Downloaded sample CSV template: name, phone, remarks.');
   };
 
   const advanceBatchWizard = () => {
-    if (batchWizardStep === 0 && !csvText) {
+    if (batchCsvReading.current) return showToast('Please wait for the selected CSV file to finish loading.');
+    if (batchWizardStep === 0 && (!uploadedFile || !csvText || batchCsvError)) {
       setBatchCsvError('Please Upload the Contact List to Continue');
       showToast('Upload a CSV contact list before continuing.');
       return;
@@ -787,6 +814,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const cancelBatchCampaignWizard = (event?: React.SyntheticEvent) => {
     event?.preventDefault();
     event?.stopPropagation();
+    clearBatchCsv();
     setBatchWizardStep(0);
     setShowBatchCreator(false);
   };
@@ -838,7 +866,10 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const handleCreateBatchCampaign = async (event?: React.SyntheticEvent) => {
     event?.preventDefault();
     event?.stopPropagation();
-    if (!batchCampName.trim() || !selectedAgentId || !selectedNumId || !csvText) return showToast('Campaign name, active agent, assigned number and CSV file are required.');
+    if (submittingCampaign) return;
+    if (batchCsvReading.current) return showToast('Please wait for the selected CSV file to finish loading.');
+    if (!batchCampName.trim() || !selectedAgentId || !selectedNumId || !uploadedFile || !csvText || batchCsvError) return showToast('Campaign name, active agent, assigned number and a successfully loaded CSV file are required.');
+    const selectedCsv = { fileName: uploadedFile, csvText };
     setSubmittingCampaign(true);
     try {
       const created = await apiRequest<CampaignApiData>('/campaigns', { method: 'POST', body: JSON.stringify({
@@ -850,9 +881,9 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
         endAfter: optionalIsoDate(endAfterDate), contextSchema: {},
       }) });
       const imported = await apiRequest<{ import: { acceptedRows: number; invalidRows: number; duplicateRows: number } }>(`/campaigns/${created.id}/batch/import`, {
-        method: 'POST', body: JSON.stringify({ fileName: uploadedFile, csvText }),
+        method: 'POST', body: JSON.stringify(selectedCsv),
       });
-      await loadCampaignData(true); setShowBatchCreator(false); setBatchCampName(''); setUploadedFile(null); setCsvText(''); setSimulatedLeadsCount(0);
+      await loadCampaignData(true); setShowBatchCreator(false); setBatchWizardStep(0); setBatchCampName(''); clearBatchCsv();
       showToast(`Campaign created: ${imported.import.acceptedRows} accepted, ${imported.import.invalidRows} invalid, ${imported.import.duplicateRows} duplicate.`);
     } catch (requestError) { showToast(requestError instanceof Error ? requestError.message : 'Batch campaign could not be created'); }
     finally { setSubmittingCampaign(false); }
@@ -908,7 +939,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
         <button
           onClick={() => {
             setActiveTab('batch');
-            setShowBatchCreator(false);
+            cancelBatchCampaignWizard();
           }}
           className={`px-5 py-2 rounded-full text-xs font-extrabold tracking-tight transition cursor-pointer ${
             activeTab === 'batch'
@@ -1037,6 +1068,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                           </button>
                         </div>
 
+                        {readingBatchCsv && <p role="status" className="text-xs text-slate-500">Reading selected CSV...</p>}
                         {uploadedFile && (
                           <div className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-100 text-[10px] font-bold rounded-lg mt-1 flex items-center space-x-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -1047,10 +1079,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                               title="Remove uploaded file"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setUploadedFile(null);
-                                setCsvText('');
-                                setSimulatedLeadsCount(0);
-                                setBatchCsvError('');
+                                clearBatchCsv();
                               }}
                               className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-emerald-800 transition hover:bg-red-100 hover:text-red-700"
                             >
@@ -1283,6 +1312,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                       <button
                         type="button"
                         onClick={advanceBatchWizard}
+                        disabled={readingBatchCsv}
                         className="rounded-xl bg-[#dfa822] px-6 py-2.5 text-xs font-black text-[#11120f] shadow-md transition hover:bg-[#c88e16]"
                       >
                         Next
@@ -1291,7 +1321,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                       <button
                         type="button"
                         onClick={(event) => void handleCreateBatchCampaign(event)}
-                        disabled={submittingCampaign || campaignsLoading || campaignAgents.length === 0 || campaignPhones.length === 0}
+                        disabled={submittingCampaign || readingBatchCsv || !uploadedFile || !csvText || !!batchCsvError || campaignsLoading || campaignAgents.length === 0 || campaignPhones.length === 0}
                         className="rounded-xl bg-[#dfa822] px-6 py-2.5 text-xs font-black text-[#11120f] shadow-md transition hover:bg-[#c88e16] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {submittingCampaign ? 'Creating Campaign...' : 'Create & Launch Campaign'}
