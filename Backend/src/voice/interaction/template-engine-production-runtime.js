@@ -295,6 +295,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
         arguments: universalTurn.workflowAction?.arguments,
       },
       toolResult: workflowResult.toolResult,
+      conversationContext,
+      workflowState: workflowResult.state,
       maximumSpeechCharacters,
       cancellationSignal: input.cancellationSignal,
       onSpeechSentence: dependencies.onSpeechSentence,
