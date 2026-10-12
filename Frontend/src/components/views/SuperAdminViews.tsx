@@ -1954,6 +1954,8 @@ function VoiceProvidersView() {
       // Include cleared fields so the backend settings merge cannot restore old values.
       settings.voiceId = modelVoiceId.trim();
       settings.language = modelLanguage.trim();
+      const originalSettings = providerModels.find((model) => model.id === editingModelId)?.settings ?? {};
+      const removedSettingsKeys = Object.keys(originalSettings).filter((key) => !Object.hasOwn(settings, key));
       let capabilities: Record<string, unknown>;
       try {
         const parsed = JSON.parse(modelCapabilities || '{}');
@@ -1972,6 +1974,7 @@ function VoiceProvidersView() {
           modelKey: modelKey.trim(), displayName: modelDisplayName.trim(),
           voiceId: modelVoiceId.trim() || undefined, language: modelLanguage.trim() || undefined,
           status: 'active', capabilities, settings,
+          ...(editingModelId ? { removedSettingsKeys } : {}),
         }),
       });
       if (editingModelId) {

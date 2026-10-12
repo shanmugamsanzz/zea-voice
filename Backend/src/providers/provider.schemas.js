@@ -52,6 +52,7 @@ export const createModelSchema = z.object({
 });
 
 export const updateModelSchema = z.object({
+  removedSettingsKeys: z.array(z.string().trim().min(1).max(160)).max(100).optional(),
   modelKey: z.string().trim().min(1).max(240).optional(),
   displayName: z.string().trim().min(1).max(240).optional(),
   voiceId: z.string().trim().min(1).max(240).optional(),

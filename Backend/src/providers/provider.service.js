@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { decryptCredential } from '../security/credential-crypto.js';
+import { normalizedModelSettings } from './model-settings.js';
 import {
   defaultRuntimeConnectionType,
   bindRuntimeConnectionToCapabilities,
@@ -96,15 +97,6 @@ function runtimeBoundCapabilities(provider, capabilities) {
     provider.runtimeConnectionType,
     capabilities ?? {},
   );
-}
-
-function normalizedModelSettings(input, current = {}) {
-  const settings = { ...(current ?? {}), ...(input.settings ?? {}) };
-  // Older editors send these values twice. Preserve an explicitly edited
-  // settings value instead of replacing it with a stale top-level field.
-  if (input.voiceId !== undefined && !Object.hasOwn(input.settings ?? {}, 'voiceId')) settings.voiceId = input.voiceId;
-  if (input.language !== undefined && !Object.hasOwn(input.settings ?? {}, 'language')) settings.language = input.language;
-  return settings;
 }
 
 async function synchronizeProviderModelRuntimeCapabilities(client, provider) {
