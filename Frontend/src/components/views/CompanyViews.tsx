@@ -582,6 +582,44 @@ interface CampaignsListProps {
   setCampaigns: React.Dispatch<React.SetStateAction<Campaign[]>>;
 }
 
+const defaultRetryOutcomes = ['busy', 'failed', 'no_answer'];
+const retryOutcomeOptions = [
+  { value: 'no_answer', label: 'No answer' },
+  { value: 'busy', label: 'Busy' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'rejected', label: 'Rejected / declined' },
+  { value: 'unavailable', label: 'Unavailable / unreachable' },
+];
+
+function RetryOutcomeSelector({ value, onChange, disabled = false }: {
+  value: string[]; onChange: (outcomes: string[]) => void; disabled?: boolean;
+}) {
+  return (
+    <fieldset disabled={disabled} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 disabled:opacity-50">
+      <legend className="px-1 text-xs font-bold text-slate-600">Retry when</legend>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {retryOutcomeOptions.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 text-xs text-slate-700">
+            <input type="checkbox" checked={value.includes(option.value)}
+              onChange={(event) => onChange(event.target.checked
+                ? [...value, option.value] : value.filter((outcome) => outcome !== option.value))}
+              className="accent-amber-500" />
+            {option.label}
+          </label>
+        ))}
+        {['Completed', 'Canceled'].map((label) => (
+          <label key={label} className="flex items-center gap-2 text-xs text-slate-400">
+            <input type="checkbox" disabled checked={false} readOnly />
+            {label} — not eligible for automatic retry
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">{disabled
+        ? 'Retries are disabled.' : 'Select at least one outcome. Only selected outcomes will be retried.'}</p>
+    </fieldset>
+  );
+}
+
 interface CampaignApiData {
   id: string; name: string; type: 'batch' | 'realtime';
   status: 'draft' | 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'archived';
@@ -652,6 +690,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const [timezone, setTimezone] = useState('Asia/Kolkata');
   
   const [retries, setRetries] = useState(1);
+  const [batchRetryOutcomes, setBatchRetryOutcomes] = useState<string[]>(defaultRetryOutcomes);
   const [priority, setPriority] = useState('Medium');
   const [slots, setSlots] = useState(2);
   const [retryInterval, setRetryInterval] = useState(60);
@@ -669,6 +708,8 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const [rtEndTime, setRtEndTime] = useState('17:00');
   const [rtEndDate, setRtEndDate] = useState('');
   const [rtSlots, setRtSlots] = useState(1);
+  const [rtRetries, setRtRetries] = useState(3);
+  const [rtRetryOutcomes, setRtRetryOutcomes] = useState<string[]>(defaultRetryOutcomes);
 
   // Toast / Status Message
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -799,6 +840,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
   const advanceBatchWizard = () => {
     if (batchCsvReading.current) return showToast('Please wait for the selected CSV file to finish loading.');
+    if (retries > 0 && !batchRetryOutcomes.length) return showToast('Select at least one retry outcome.');
     if (batchWizardStep === 0 && (!uploadedFile || !csvText || batchCsvError)) {
       setBatchCsvError('Please Upload the Contact List to Continue');
       showToast('Upload a CSV contact list before continuing.');
@@ -877,7 +919,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
         agentId: selectedAgentId, phoneNumberId: selectedNumId, timezone, concurrencyLimit: slots,
         priority: priority.toLowerCase(), retries,
         retryIntervalsMs: Array.from({ length: retries }, retryIntervalMilliseconds),
-        retryOutcomes: ['busy', 'failed', 'no_answer'], callingStartTime: to24Hour(startTime), callingEndTime: to24Hour(endTime),
+        retryOutcomes: retries > 0 ? batchRetryOutcomes : [], callingStartTime: to24Hour(startTime), callingEndTime: to24Hour(endTime),
         endAfter: optionalIsoDate(endAfterDate), contextSchema: {},
       }) });
       const imported = await apiRequest<{ import: { acceptedRows: number; invalidRows: number; duplicateRows: number } }>(`/campaigns/${created.id}/batch/import`, {
@@ -892,12 +934,13 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const handleCreateRealtimeCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rtCampName.trim() || !rtAgentId || !rtNumberId) return showToast('Campaign name, active agent and assigned from-number are required.');
+    if (rtRetries > 0 && !rtRetryOutcomes.length) return showToast('Select at least one retry outcome.');
     setSubmittingCampaign(true);
     try {
       await apiRequest<CampaignApiData>('/campaigns', { method: 'POST', body: JSON.stringify({
         name: rtCampName.trim(), type: 'realtime', status: 'running', agentId: rtAgentId,
-        phoneNumberId: rtNumberId, timezone, concurrencyLimit: rtSlots, priority: 'high', retries: 3,
-        retryIntervalsMs: [300000, 600000, 900000], retryOutcomes: ['busy', 'failed', 'no_answer'],
+        phoneNumberId: rtNumberId, timezone, concurrencyLimit: rtSlots, priority: 'high', retries: rtRetries,
+        retryIntervalsMs: [300000, 600000, 900000].slice(0, rtRetries), retryOutcomes: rtRetries > 0 ? rtRetryOutcomes : [],
         callingStartTime: to24Hour(rtStartTime), callingEndTime: to24Hour(rtEndTime),
         endAfter: optionalIsoDate(rtEndDate), contextSchema: { lead_name: 'string', company: 'string' },
       }) });
@@ -1232,6 +1275,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     </div>
 
                     {/* Start Time & End Time */}
+                    <RetryOutcomeSelector value={batchRetryOutcomes} onChange={setBatchRetryOutcomes} disabled={retries === 0} />
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start Time</label>
@@ -1785,6 +1829,14 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
               </div>
 
               {/* Submit Button (magenta pink) */}
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Retries</label>
+                <input type="number" min={0} max={3} value={rtRetries}
+                  onChange={(event) => setRtRetries(Math.min(3, Math.max(0, Number(event.target.value) || 0)))}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2" />
+                <p className="mt-1 text-xs text-slate-500">Retry delays: {[5, 10, 15].slice(0, rtRetries).join(', ') || 'none'} minutes.</p>
+              </div>
+              <RetryOutcomeSelector value={rtRetryOutcomes} onChange={setRtRetryOutcomes} disabled={rtRetries === 0} />
               <div className="pt-4 flex flex-col space-y-2">
                 <button
                   type="submit"

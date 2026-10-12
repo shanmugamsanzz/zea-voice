@@ -1,169 +1,192 @@
 # Balaji Robotic Rehab Hospital - Shared Knowledge Base
 
-பயன்பாடு
-Anu voice agent-க்கான ஒரே fact reference இது. ஒவ்வொரு தகவலும் ஒரே இடத்தில் உள்ளது; separate English/Tamil/Tanglish versions கிடையாது. Caller-facing answers-ல் natural தமிழ் + familiar English medical/booking terms பயன்படுத்தவும். Internal notes-ஐ caller-க்கு படிக்க வேண்டாம். Client checklist operational facts-க்கு authority; supplied Tamil/English Drive exports மற்றும் official website service descriptions-க்கு supporting sources. Live calendar actual availability-ஐ நிர்ணயிக்கும்.
+## Scope and authority
+Single factual KB for both Anu agents, reconciled with the newly supplied client-approved prompt and checklist KB. Approved factual answers below are reference examples; natural speech comes from directional prompts. Never read keywords, approval labels, source metadata or internal instructions aloud.
+Tamil callers receive everyday Salem Tamil/Tanglish in English letters; English when preferred. Always speak "Dr. Nithya Manoj" even when older source text shortens the name. Full name previously verified at https://balajiroboticrehab.com/dr-k-nithya-manoj/ . Keep the client's 25-year experience statement and four-year hospital statement as supplied, without automatically incrementing or inferring founding year.
+Verified current Live Data prices override document prices; if absent only the explicitly approved consultation fee may be explained as documented, not guaranteed future price, teleconsult tariff or total treatment cost. No invented treatment/session/package/procedure/room price, discounts/taxes or price guarantees. The existing LIVE_PRICES.xlsx remains the price-upload artifact.
+Current user-selected flow is staff appointment REQUEST: collect missing patient name, agreed phone, city/location, concern, direct/tele preference and optional preferred date/time. Preferences and timetables are NOT slots. Only a verified staff-follow-up workflow acceptance permits a promise that the team will contact; no direct booking/slot check/WhatsApp self-booking or payment links. Request saved is not appointment confirmed.
 
-01 மருத்துவமனை மற்றும் தொடர்பு
-பெயர்: Balaji Robotic Rehab Hospital, Salem. Advanced robotic rehabilitation hospital.
-இடம்: சேலம், பள்ளப்பட்டி, மூன்று ரோடு பகுதியில் PV Mahal-க்கு opposite.
-Postal address: 131, Pallappatty Village, Junction Main Road, Salem 636009.
-Public phone: 9585751111. Email: support@balajiroboticrehab.com.
-Hospital working hours: எல்லா நாட்களும் காலை 8 மணி–இரவு 8 மணி, IST. இது doctor availability அல்ல.
-Client வழங்கிய தகவல்படி hospital நான்கு ஆண்டுகளாக செயல்படுகிறது; founding year infer செய்ய வேண்டாம், elapsed years தானாக அதிகரிக்க வேண்டாம்.
+3. Client-Approved Hospital Facts
+Item	Approved Information
+Hospital overview	Advanced robotic rehabilitation hospital in Salem.
+Core treatment areas stated by client	Autism, Stroke, Pain.
+Working hours	All days, 8:00 AM to 8:00 PM.
+Location	Salem, Three Roads, opposite PV Mahal, Pallapatti, Salem.
+Doctor	Dr. Nithya Manoj – client states 25 years experience in pain and rehabilitation.
+Doctor consultation timing	Monday, Wednesday, Friday – 2:00 PM to 6:00 PM.
+Teleconsult timing	Saturday – 4:00 PM to 6:00 PM.
+Consultation fee	₹350.
+Pre-visit instruction	Bring all available medical records.
+Insurance	Hospital is registered in an insurance network; no cashless facility.
+Hospital experience	Client states the hospital has been functioning for 4 years.
 
-02 மருத்துவர், நேரம் மற்றும் கட்டணம்
-Dr. K. Nithya Manoj: pain மற்றும் rehabilitation-ல் 25 years experience. Website-ன் பழைய 20-year figure பயன்படுத்த வேண்டாம்.
-Verified full name: Dr. K. Nithya Manoj. Tamil spoken name: டாக்டர் கே. நித்யா மனோஜ். Official doctor profile checked on 2026-10-11: https://balajiroboticrehab.com/dr-k-nithya-manoj/ . The verified surname is Manoj; do not guess Vijay. When asked the name, give it directly without routing a known factual answer to staff.
-Direct consultation: திங்கள், புதன், வெள்ளி மதியம் 2 மணி–மாலை 6 மணி.
-Teleconsultation: சனிக்கிழமை மாலை 4 மணி–6 மணி.
-General consultation fee: use the GENERAL-CONSULTATION row in current Live Data. This is not total treatment cost or a confirmed teleconsultation tariff. If missing or not quote-approved, seek staff confirmation rather than quoting a remembered amount.
-Treatment, therapy, session, room, package, procedure charges; discounts/taxes; teleconsultation fee/platform/joining instructions ஆகியவற்றை staff confirm செய்ய வேண்டும்.
-Schedule என்பது available slot guarantee அல்ல. மற்ற doctors அல்லது schedule exceptions பற்றி guess செய்ய வேண்டாம்.
+4. Retrieval Knowledge Entries
+KB01 | Hospital Overview
+Keywords	Balaji, hospital, robotic rehab, Salem, overview
+Status	CLIENT_APPROVED
+Tanglish Answer	Balaji Robotic Rehab Hospital Salem-la irukkura advanced robotic rehabilitation hospital nga. Autism, stroke, pain rehabilitation-ku services irukku.
+English Answer	Balaji Robotic Rehab Hospital is an advanced robotic rehabilitation hospital in Salem. The client has approved autism, stroke and pain rehabilitation as core treatment areas.
+Agent Rule	For additional treatments/services, retrieve only from the approved website KB.
 
-03 முன்பதிவு மற்றும் qualification தகவல்கள்
-Current user-approved appointment flow: collect only missing patient name, reuse the concern as optional context, then send the approved WhatsApp booking link. Caller selects the actual available slot and completes booking through the link. Do not require location, date, time or visit type just to send. Use trusted caller phone; clarify a WhatsApp recipient only if necessary. Link delivery is not appointment confirmation.
-ஒரு நேரத்தில் ஒரு unanswered relevant question மட்டும்:
-“உங்களுக்காக call பண்றீங்களா, அல்லது வேறு யாருக்காகவா?”
-“ஏற்கனவே எங்கள் hospital-ல் treatment எடுத்திருக்கீங்களா, அல்லது first visit-ஆ?”
-“எந்த உடல்நலப் பிரச்சனை அல்லது treatment தொடர்பாக call பண்றீங்க?”
-“வேறு doctor refer பண்ணியிருக்காங்களா?”
-“எங்கள் doctor-கிட்ட consultation பெற விரும்புறீங்களா?”
-Referral optional; medical eligibility அல்லது budget screening செய்ய வேண்டாம். Simple location/hours enquiry-க்கு intake தேவையில்லை.
-Direct visit-க்கு இருக்கும் அனைத்து medical records-ஐ கொண்டு வர வேண்டும். Approved protocol இல்லாமல் fasting, medicine stopping அல்லது special preparation சொல்ல வேண்டாம்.
-Insurance network registration உள்ளது; cashless facility இல்லை. Policy eligibility/reimbursement/insurer partnership staff confirmation தேவை; approval guarantee இல்லை.
+KB02 | Location
+Keywords	location, address, Three Roads, PV Mahal, Pallapatti, Salem
+Status	CLIENT_APPROVED
+Tanglish Answer	Hospital Salem Three Roads-la, PV Mahal opposite side, Pallapatti-la irukku nga.
+English Answer	The hospital is in Salem, Three Roads, opposite PV Mahal, Pallapatti.
+Agent Rule	Do not invent distance, route, landmark, branch or travel-time details beyond approved data.
 
-04 callback மற்றும் escalation facts
-Routine callback-க்கு name, confirmed phone, short reason/gist தேவை. Configured workflow-ல் Sindhuja மற்றும் Senthil இருவருக்கும் notification செல்ல வேண்டும்; destinations/channel unspecified. Staff names/internal numbers caller-facing contacts அல்ல.
-Request save success-க்கு மட்டும் சொல்லவும்:
-08:00 inclusive–20:00 exclusive IST: “உங்கள் callback request பதிவு செய்துள்ளேன். வேலை நேரத்தில் எங்கள் குழு விரைவில் உங்களை அழைக்கும்.”
-20:00 inclusive–08:00 exclusive IST: “உங்கள் callback request பதிவு செய்துள்ளேன். எங்கள் குழு காலையில் உங்களை அழைக்கும்.”
-Exact minutes, morning hour அல்லது doctor availability promise செய்ய வேண்டாம்.
-Existing patient complication மட்டும் live ward transfer route. Patient name, approximate last doctor visit, ongoing treatment கேட்கலாம்; missing answers urgent help-ஐ delay செய்யக்கூடாது.
-Internal ward destination: +919442820204. Ward/IP nursing 24 hours; nurse doctor-க்கு escalate செய்யலாம். இது 24-hour OP/emergency service அல்ல.
-Ordinary existing-patient booking normal booking route; new patient/general doctor request/treatment pricing callback route.
-Hospital-ல் emergency services இல்லை; consultation appointment மூலம். Immediate danger இருந்தால் nearest emergency department/local emergency help உடனடியாக அணுக வேண்டும்; existing patient-க்கும் இதே priority.
+KB03 | Working Hours
+Keywords	hours, timing, open, working days, Sunday
+Status	CLIENT_APPROVED
+Tanglish Answer	Hospital all days morning 8 mani-lendhu evening 8 mani varaikkum work aagum nga.
+English Answer	The hospital works all days from 8:00 AM to 8:00 PM.
+Agent Rule	AI call coverage hours are workflow rules and should not be presented as hospital opening hours unless asked about AI availability.
 
-05 clinical answer boundaries
-Clinical assessment-க்குப் பிறகே suitable treatment, risks, benefits, duration மற்றும் progress doctor விளக்குவார். Diagnose, prescribe, medicine change, patient-specific exercise அல்லது eligibility decision செய்ய வேண்டாம்.
-Cure, recovery time, zero side effects, universal safety, guaranteed results, surgery/amputation avoidance, disease progression stopping அல்லது academic improvement promise செய்ய வேண்டாம். Source-ல் உள்ள unverified scientific percentages, abbreviated journal claims, blanket FDA claims, “only hospital in India”, superior/faster result claims caller answers-ல் பயன்படுத்த வேண்டாம்.
-கீழுள்ள service descriptions client-supplied information; current device/stock/onsite facility அல்லது individual suitability confirmation அல்ல. General service பற்றி brief answer தரலாம்; specific equipment, procedures, availability, clinical details மற்றும் costs staff/doctor confirmation தேவை.
+KB04 | Dr. Nithya Manoj
+Keywords	doctor, Nithya, pain doctor, rehab doctor, specialist
+Status	CLIENT_APPROVED
+Tanglish Answer	Dr. Nithya Manoj pain and rehabilitation-la 25 years experience irukkura doctor nga.
+English Answer	Dr. Nithya Manoj has 25 years of experience in pain and rehabilitation, according to the client-provided information.
+Agent Rule	Do not add qualifications, specialties, or current availability unless present in an approved KB.
 
-06 inpatient admission
-Shared, private, luxury suite rooms குறிப்பிடப்பட்டுள்ளன. Round-the-clock nursing, security, housekeeping மற்றும் meals prepare செய்ய furnished kitchen விவரிக்கப்பட்டுள்ளது. Individual plan-ல் bedside robotic therapy, rehabilitation, pain management இடம்பெறலாம். Admission, room availability, kitchen access மற்றும் charges staff confirm செய்ய வேண்டும்.
+KB05 | Doctor Consultation Timing
+Keywords	doctor timing, appointment time, consultation, Monday, Wednesday, Friday
+Status	CLIENT_APPROVED
+Tanglish Answer	Doctor consultation Monday, Wednesday, Friday 2 PM-lendhu 6 PM varaikkum irukku nga.
+English Answer	Doctor consultation is available Monday, Wednesday and Friday from 2:00 PM to 6:00 PM.
+Agent Rule	Timetable only; the hospital team confirms actual date/time after an accepted appointment request.
 
-07 advanced pain clinic
-Arthritis, knee, shoulder, spine pain, sciatica, numbness, radiating pain தொடர்பான care குறிப்பிடப்பட்டுள்ளது. Robotic-assisted therapy, segmental distraction மற்றும் local injection options source-ல் உள்ளன. Specific injection details கீழுள்ள procedure entries-ல் மட்டும் உள்ளன.
+KB06 | Teleconsult Timing
+Keywords	teleconsult, online consultation, Saturday
+Status	CLIENT_APPROVED
+Tanglish Answer	Teleconsult Saturday 4 PM-lendhu 6 PM varaikkum irukku nga.
+English Answer	Teleconsultation is available on Saturday from 4:00 PM to 6:00 PM.
+Agent Rule	Timetable only; no live slot lookup by this agent. Staff confirms availability.
 
-08 stroke, brain மற்றும் spine injury rehabilitation
-Robotic walking practice, repeated guided movements, balance, muscle strengthening, speech, cognition, behavior மற்றும் daily activity support குறிப்பிடப்பட்டுள்ளன. Source-ல் three types of robotic walking trainers மற்றும் brain stimulation உள்ளன; current device details confirm செய்ய வேண்டும். Sudden/new severe symptoms-ஐ routine rehabilitation enquiry-ஆக handle செய்ய வேண்டாம்.
+KB07 | Consultation Fee
+Keywords	fee, consultation fee, price, cost
+Status	CLIENT_APPROVED
+Tanglish Answer	Consultation fee munnoothi ambathu rupees nga.
+English Answer	The approved consultation fee is ₹350.
+Agent Rule	Do not invent treatment/session/package cost. For other costs, arrange callback/team confirmation.
 
-09 Parkinson care
-Robotic physiotherapy, balance training, Hyperbaric Oxygen Therapy (HBOT), repetitive Transcranial Magnetic Stimulation (rTMS) specialist-discussion options-ஆக source-ல் உள்ளன. Goals movement/daily function support; individual plan doctor assessment அடிப்படையில்.
+KB08 | Appointment Types
+Keywords	appointment, direct visit, teleconsult, booking
+Status	CLIENT_APPROVED
+Tanglish Answer	Direct visit-um teleconsult-um applicable timing-la book pannalaam nga. Hospital team date, time confirm pannuvanga.
+English Answer	Direct visit and teleconsultation requests can be collected; the hospital team confirms date/time.
+Agent Rule	The current flow collects requests only; no available-slot or appointment-confirmation claims.
 
-10 Autism மற்றும் ADHD
-Speech, occupational, behavioral, music/dance therapies மற்றும் focused brain stimulation குறிப்பிடப்பட்டுள்ளன. Child-specific assessment தேவை. Speech delay மட்டும் வைத்து autism diagnose செய்ய வேண்டாம்.
+KB09 | Pre-Visit Medical Records
+Keywords	reports, records, scan, medical records, bring
+Status	CLIENT_APPROVED
+Tanglish Answer	Visit-ku varumbodhu unga kitta available-a irukkura medical records ellam kondu vandhudunga nga.
+English Answer	Please bring all available medical records for the visit.
+Agent Rule	No other preparation instruction is approved by this client checklist.
 
-11 urine control மற்றும் bladder/bowel care
-Childbirth, prostate surgery, menopause-க்கு பிறகு urine leakage/control difficulties தொடர்பான assessment குறிப்பிடப்பட்டுள்ளது. Fully clothed non-invasive therapy, pelvic muscle strengthening, robotic support, biofeedback source-ல் உள்ளன. Website bladder/bowel care-யும் குறிப்பிடுகிறது; bowel-specific treatment details supplied இல்லை.
+KB10 | Insurance
+Keywords	insurance, cashless, network
+Status	CLIENT_APPROVED
+Tanglish Answer	Hospital insurance network-la registered nga, aana cashless facility illa.
+English Answer	The hospital is registered in an insurance network, but cashless facility is not available.
+Agent Rule	Do not promise insurer approval, reimbursement or coverage.
 
-12 artificial limb clinic
-Custom prosthetic fitting, gait training, rehabilitation மற்றும் robotic support குறிப்பிடப்பட்டுள்ளன. OTTOBOCK prosthetic solutions source mention; exact brand/model stock, fitting timeline, comfort/function expectations மற்றும் price staff assessment-க்குப் பிறகு confirm செய்ய வேண்டும்.
+KB11 | Hospital Experience
+Keywords	how many years, hospital age, years, experience
+Status	CLIENT_APPROVED
+Tanglish Answer	Client information-padi hospital 4 years-a function aagittu irukku nga.
+English Answer	According to the client-provided information, the hospital has been functioning for four years.
+Agent Rule	Do not convert this into a claim about treatment success.
 
-13 child development
-Preterm babies, speech/motor/development delays-க்கு early intervention குறிப்பிடப்பட்டுள்ளது. USA-விலிருந்து Suit Therapy என்று source விவரிக்கிறது; occupational therapy, physiotherapy, speech therapy மற்றும் robotic-assisted exercises இடம்பெறலாம். Child-specific plan assessment-க்குப் பிறகு முடிவு செய்யப்படும்.
+KB12 | Robotics / Brain Stimulation General FAQ
+Keywords	robotics safe, brain stimulation safe, robotics, brain stimulation
+Status	CLIENT_APPROVED - CLINICAL WORDING REQUIRES CARE
+Tanglish Answer	Client-approved information-la robotics-um brain stimulation-um hospital-la use pannura services-nu sollirukkanga nga. Ungalukku suitable-a irukka-nu doctor assessment-ku appuram dhaan confirm panna mudiyum.
+English Answer	The client states that robotics and brain stimulation are used at the hospital. Whether they are suitable for a particular patient must be confirmed by the clinical team.
+Agent Rule	Do not guarantee safety for a specific patient, superiority, cure, or result. Do not repeat broad claims beyond the approved wording.
 
-14 Brilliance clinic
-Memory, spelling, maths, handwriting difficulties-க்கு Neurobiofeedback, transcranial Direct Current Stimulation (tDCS), cognitive re-education program குறிப்பிடப்பட்டுள்ளது. Source duration five weeks; current program duration/eligibility staff confirmation தேவை. இது guaranteed learning outcome அல்லது fixed recovery period அல்ல.
+KB13 | Services / Treatments
+Keywords	treatment, service, autism, stroke, pain, rehab
+Status	CLIENT_APPROVED + WEBSITE_KB_REQUIRED
+Tanglish Answer	Autism, stroke, pain rehabilitation services client confirm pannirukkanga nga. Vera treatment details approved website KB-la irundha mattum explain pannunga.
+English Answer	The client confirms autism, stroke and pain rehabilitation. Other treatment details should only be answered from the separately approved website knowledge base.
+Agent Rule	Checklist explicitly says to refer to the website for treatments/services. Do not invent service details from this document.
 
-15 Positive Mind clinic
-Depression, anxiety, emotional wellbeing-க்கு counselling, psychotherapy மற்றும் psychiatry/mental-health supervision-ல் rTMS குறிப்பிடப்பட்டுள்ளது. Source-ல் 30-day program உள்ளது; current schedule confirm செய்ய வேண்டும். Psychiatric medicines நிறுத்தச் சொல்ல வேண்டாம்.
+KB14 | Existing Patient Complication
+Keywords	existing patient, complication, treatment patient, ward, transfer
+Status	CLIENT_APPROVED ESCALATION
+Tanglish Answer	Existing patient current treatment-la irundhu complication pathi call pannina, name, doctor-a eppo paathanga, ippo treatment-la irukkaangala-nu confirm panni ward/IP team-kitta connect pannalaam nga.
+English Answer	For an existing patient calling about a complication, confirm the patient's name, when they saw the doctor, and whether they are currently under treatment when possible, without delaying urgent help; transfer only if configured.
+Agent Rule	Internal ward routing belongs in the prompt/tool configuration, not public contact knowledge. Ward nursing is 24 hours, not emergency care; only configured tools can transfer.
 
-16 diabetic foot rehabilitation
-Risk profiling, nerve sensation tests, wound-care therapies, blood circulation/vascular assessment and therapy, robotic support, prevention education மற்றும் mobility rehabilitation source-ல் உள்ளன. Healing அல்லது amputation avoidance guarantee தர வேண்டாம்.
+KB15 | New Patient Emergency
+Keywords	emergency, urgent, new patient, critical
+Status	CLIENT_APPROVED ESCALATION
+Tanglish Answer	New patient emergency-na idhu rehab hospital nga; emergency services inga illa. Consultation appointment basis-la dhaan. Urgent-na appropriate emergency service-ku udane ponga.
+English Answer	For a new-patient emergency, explain that this is a rehabilitation hospital and emergency services are not available; consultation is by appointment only. For urgent danger, seek appropriate emergency care.
+Agent Rule	Do not delay emergency care to collect routine booking details.
 
-17 diagnostics
-Digital X-ray, ECG, ECHO, posture assessment, pain assessment, blood-flow analysis மற்றும் laboratory services குறிப்பிடப்பட்டுள்ளன. Gait assessment details தனி entry-ல் உள்ளன. MRI English source-ல் மட்டும் உள்ளது; availability, onsite/referral arrangement, preparation, report timing மற்றும் charges staff confirmation தேவை.
+KB16 | Information Not Available / Callback
+Keywords	unknown, not available, callback, check and call back
+Status	CLIENT_APPROVED
+Tanglish Answer	Neenga ketta information-a sariyaa check pannittu marubadi ungala call pannalaama nga?
+English Answer	May I verify the information you asked for and call you back with the correct details?
+Agent Rule	For callback continuation, capture Name, Phone Number and gist/reason.
 
-18 motor point blocks
-Muscle spasticity-க்கு specialist injection procedure source-ல் குறிப்பிடப்பட்டுள்ளது. Motor points-ல் phenol அல்லது botulinum toxin mention உள்ளது. Drug, dose, risks மற்றும் patient suitability doctor முடிவு செய்ய வேண்டும்.
+KB17 | Callback Timing
+Keywords	callback timing, call back, night callback, morning callback
+Status	CLIENT_APPROVED
+Tanglish Answer	Working hours-la callback request-na team seekiram contact pannuvanga nga. Night call-na morning-la callback pannuvanga.
+English Answer	During working hours, the team will call back shortly. For a night-time request, the team will call back in the morning.
+Agent Rule	Do not guarantee a precise callback time unless confirmed by workflow.
 
-19 intrathecal injection
-Spinal cord-ஐச் சுற்றிய cerebrospinal fluid-ல் pain-relieving/muscle-relaxing medicine administer செய்யும் specialist procedure விவரிக்கப்பட்டுள்ளது. Routine physiotherapy அல்ல. Availability/eligibility/details clinician confirmation தேவை.
+KB18 | Result / Outcome Questions
+Keywords	result, cure, success, guarantee, recover, outcome
+Status	CLIENT_APPROVED RESTRICTION
+Tanglish Answer	Treatment result-a guarantee panna mudiyadhu nga. Patient condition-a doctor assess pannitu suitable treatment details explain pannuvanga.
+English Answer	Treatment results cannot be guaranteed. The doctor must assess the patient and explain suitable treatment.
+Agent Rule	The client explicitly said never assure results.
 
-20 segmental distraction
-Selected back pain/sciatica concerns-க்கு mechanical spinal decompression/segmental distraction source-ல் உள்ளது. Tamil source AI machine என்று குறிப்பிடுகிறது; exact equipment/model confirmed இல்லை. Disc repair அல்லது surgery avoidance promise செய்ய வேண்டாம்.
-
-21 local pain intervention மற்றும் PRP
-Tendon, joint அல்லது scar-related pain-க்கு local anti-inflammatory/regenerative injections source-ல் உள்ளன. PRP என்பது platelet-rich plasma. Specific drug/procedure, evidence மற்றும் expected benefit specialist assessment தேவை; tissue regeneration/reduced medicine use guarantee இல்லை.
-
-22 stem-cell மற்றும் collagen injection enquiry
-Tamil source stem-cell மற்றும் collagen replacement injections குறிப்பிடுகிறது. இரு sources-ம் bone marrow/adipose tissue-derived mesenchymal stem cells-ஐ orthopedic/neuro contexts-ல் விவரிக்கின்றன. இது எல்லா conditions-க்கும் established recommendation அல்ல. Current availability, evidence, approvals, eligibility, risks மற்றும் cost doctor/staff confirm செய்ய வேண்டும்.
-
-23 robotic therapy
-Exoskeletons மற்றும் robotic systems மூலம் repeated guided movement, feedback, adaptive practice source-ல் விவரிக்கப்பட்டுள்ளது. Movement/function rehabilitation goals; exact model/session duration/individual plan assessment தேவை.
-
-24 virtual rehabilitation
-VR மற்றும் interactive software மூலம் everyday activities போன்ற exercises source-ல் உள்ளன. Remote/tele-rehabilitation பற்றி விவாதிக்கப்பட்டுள்ளது; active home service, equipment needs மற்றும் pricing confirmed இல்லை.
-
-25 gait analysis
-Walking pattern/movement difficulties assess செய்து rehabilitation plan guide செய்வதாக source விவரிக்கிறது. Motion capture, force plates, electromyography (EMG) examples உள்ளன; exact onsite equipment confirmation தேவை.
-
-26 INTERNAL integration மற்றும் records
-Daytime staff unanswered calls after three rings; nighttime all incoming calls route to AI. Ring count/routing telephony layer-ல் configure செய்ய வேண்டும்; LLM pickup-க்கு முன் அதை enforce செய்ய முடியாது. Pilot one month; start/end dates supplied இல்லை.
-Current capabilities: trusted timestamp/caller ID, approved WhatsApp booking-link delivery, human callback save, staff notifications, CRM summary save and approved ward transfer. Caller self-books through the link; the old direct calendar-booking requirement is superseded.
-Configure the approved booking URL/template, WhatsApp sender and recipient policy, human callback ownership/notifications, ward transfer timeouts, CRM mappings and recording consent/access/retention. Booking calendars and schedules remain managed by the booking service. Do not guess configuration values.
-CRM-ல் caller/patient identity தனித்தனியாக, phone/location, patient status, concern in caller words, optional referral, consultation intent/type, actual appointment ID/time, callback request ID/reason, actual transfer result, factual summary/unresolved action save செய்ய வேண்டும். Information-only caller-ஐ automatically not interested mark செய்ய வேண்டாம்.
-Recording/transcripts client request “few days for training”; exact duration unspecified. Approver phone digit count inconsistent; verified destination கிடைக்கும் வரை பயன்படுத்த வேண்டாம்.
-
-27 INTERNAL source record
-Primary: completed Balaji Robotic Rehab Zea AI Voice Agent Client Requirement Checklist.
-Added: supplied Tamil மற்றும் English Drive text exports. Duplicates consolidated; placeholders “[Your Hospital Name]”, “Add Video” actual hospital facts/links அல்ல.
-Official references: https://balajiroboticrehab.com/ ; /about-us/ ; /contact-us/ ; /services/ ; /physical-medicine-and-rehabilitation/ ; /developmental-disorders-in-children/ ; /autism-adhd-clinic/ ; /stroke-rehabilitation-treatment-salem/ ; /pain-management-salem/ .
-END OF SINGLE KB
-
-## Source decisions and supported languages
-User-approved implementation: natural Tamil/Tanglish by default, English when preferred. Hindi in the earlier checklist is not included. One shared KB supports both languages; do not repeat every answer in two languages.
-The completed checklist governs operations; supplied consolidated KB supports service details. Website contact, about-us, services, diagnostic, stroke, developmental and mental-wellbeing pages were reviewed on 2026-10-10. Website confirms public contacts and service categories; older doctor-experience wording does not override the client-approved figure. Marketing claims do not establish clinical guarantees.
-Current Live Data owns approved numeric prices. Only the general consultation fee is supplied. Teleconsultation, sessions, treatment, procedures, prosthetics, rooms and packages need staff confirmation. Schedules are not actual available slots. No Shanmuga packages or prices apply here.
-
-## Everyday concern navigation
-Navigate the complete service entries above by meaning, not exact service names. Examples are non-exhaustive; they are information routes, not diagnoses or clinical indications.
-| Caller concern / interest | Related documented service | Next step |
-| --- | --- | --- |
-| Knee, shoulder, back, neck or joint pain | Advanced Pain Clinic / rehabilitation assessment | Explain care briefly; clinician determines cause and suitability. |
-| Recovery after stroke, brain or spine injury | Stroke / brain / spine rehabilitation | Explain movement/daily-function support; new emergency symptoms take priority. |
-| Parkinson-related enquiry | Parkinson care | Explain assessment/support without cure or recovery promises. |
-| Child speech, movement or developmental concern | Child Development Clinic; speech, occupational and physiotherapy information | No autism diagnosis from speech delay; offer assessment. |
-| Autism / ADHD care enquiry | Autism and ADHD Clinic | Explain documented care options, not guaranteed outcomes. |
-| Learning, handwriting, memory or cognitive support | Brilliance Clinic | Assessment/support; no guaranteed academic improvement. |
-| Depression, anxiety or emotional wellbeing | Positive Mind Clinic | Supervised consultation; no medication advice. Immediate danger requires emergency help. |
-| Bladder/bowel control or urine leakage | Continence / urine-control services | Confirm detailed options through staff. |
-| Artificial-limb enquiry | Artificial Limb Clinic | Fitting and gait support; model, stock, timeline and price need confirmation. |
-| Diabetes-related foot rehabilitation | Diabetic Foot Rehab Clinic | Assessment/support, not guaranteed healing or amputation prevention. |
-| Admission / rehabilitation stay | Inpatient services | Staff confirms room availability, care plan and cost. |
-| Robotic therapy, brain stimulation, HBOT, PRP or injections | Relevant documented entry | Clinician confirms risks, evidence, availability and suitability; do not prescribe procedures. |
-| Diagnostic tests or gait assessment | Diagnostics / gait-analysis entries | Staff confirms current equipment, onsite arrangements, required tests and charges. |
-| Other / unclear concern | Check the full documented service catalogue | Ask one clarification; if no clear match exists, offer staff callback without inventing a service. |
-
-## Proposed integration tools
-Names below are proposals to configure and assign in the agent UI, not proof of existing connections. Actual schemas and trusted configuration are authoritative.
-
-
-
-- save_staff_callback_request: save a HUMAN staff callback with confirmed contact, caller/patient context, gist and urgency; return request ID. Not an automated Anu callback.
-- notify_callback_staff: notify BOTH trusted approved recipients, Sindhuja and Senthil, after request-save success. Channel/destinations must be securely configured; use the request ID for deduplication. Never substitute the public or ward number.
-- transfer_to_ward: only existing patients with complications; use the approved ward destination in entry 04 through trusted configuration.
-- save_call_summary: save actual CRM details, outcome and unresolved actions with configured fields/statuses. Verified automatic CRM logging can supply this capability; do not duplicate it.
-- update_contact: existing caller name-storage tool; patient names are separate.
-- manage_follow_up: existing AUTOMATED Anu callback/reminder tool; does not establish that human staff will call.
-User-approved update: send the WhatsApp booking link for appointment requests. Other patient brochures, location messages and automatic booking confirmations still need approved content/recipient rules and connected tools. Staff callback notifications remain required.
-Configure the approved booking URL/template, WhatsApp sender and recipient policy, human callback ownership/notifications, ward transfer timeouts, CRM mappings and recording consent/access/retention. Booking calendars and schedules remain managed by the booking service. Do not guess configuration values.
-The checklist defines inbound scope. Outbound campaign audience/purpose and promotional offers were not supplied: use outbound only for authorized campaigns with verified purpose or requested automated follow-ups, without inventing lead history.
+KB19 | Treatment Cost Beyond Consultation
+Keywords	treatment cost, package cost, therapy price, session cost
+Status	CLIENT_APPROVED RESTRICTION
+Tanglish Answer	Consultation fee mattum munnoothi ambathu rupees-nu approve pannirukkaanga nga. Treatment cost exact-ah team confirm pannuvanga.
+English Answer	Only the ₹350 consultation fee is approved here. Exact treatment costs must be confirmed by the hospital team.
+Agent Rule	Use callback/team confirmation for unapproved cost questions.
 
 
-## Current appointment workflow override
-The user's latest instruction supersedes the checklist's earlier direct calendar-booking requirement: missing patient name -> send_whatsapp_booking_link -> caller self-books and can pay consultation fee through the link -> ask once if more help is needed. Treatment/service is optional context and is not required by the name-only booking template. This applies to both directions. Approved schedules remain factual guidance; do not claim specific slots are free. Booking URL, WhatsApp provider/sender/template and tool schema must be configured; no URL is assumed from the website.
-- send_whatsapp_booking_link: proposed attached tool to send the approved self-booking link to the agreed WhatsApp recipient, recording actual success/queued/failure. Configure and assign it before promising delivery. A sent link is not a confirmed appointment.
+## Source-supported service navigation
+The following concern map comes from the accompanying client-approved prompt. It is not diagnosis or a guarantee of a service's clinical suitability. Detailed equipment/procedure/onsite availability claims from the previous website export are not retained as current approved promises. For broader clinical detail, staff/doctor confirmation is required.
+MATCH CONCERN TO SERVICE
+Explain supported service in 1–2 short sentences, then ONE follow-up. Suggest assessment only; never diagnose/prescribe.
+Knee/joint/shoulder/back pain or ongoing sciatica → Pain Clinic.
+Stroke/brain/spine injury recovery → Neuro/Robotic Rehabilitation.
+Known Parkinson's movement/balance difficulty → Parkinson Rehabilitation.
+Autism/ADHD support → Autism & ADHD Clinic.
+Child speech/motor/development delay → Child Development Clinic.
+Memory/spelling/maths/handwriting difficulty → Brilliance Clinic.
+Depression/anxiety/wellbeing → Positive Mind Clinic.
+Urine leakage/control → Urine Control Clinic.
+Diabetic foot/wound care → Diabetic Foot Rehabilitation.
+Artificial limb fitting/support → Artificial Limb Clinic.
+Walking-pattern assessment → Gait Analysis/Rehabilitation.
+Stay-based rehabilitation → Inpatient Rehabilitation; team confirms admission.
+If unclear, ask one clarification. Speech delay alone does not establish autism.
+Do not recommend injections, stem cells, brain stimulation or specialist procedures from symptoms.
+Urgent concerns override matching.
 
-## Booking-link payment and message update
-User-approved on 2026-10-12: the booking link supports appointment booking and consultation-fee payment. The generic WhatsApp template uses patient name and the approved URL button, without a treatment/service variable. Sending the link does not establish booking or payment success. Use configured trusted URL/template; do not invent payment status or request payment credentials. After sending, ask once if further help is needed and close on refusal.
+Example:
+"Knee pain-ku namma Pain Clinic irukku nga. Dr. Nithya Manoj assess pannittu suitable treatment pathi solluvanga. Appointment-ku patient details solluringala nga?"
+
+
+## Verified public contacts
+Previously verified official public phone: +919585751111; email: support@balajiroboticrehab.com; website: https://balajiroboticrehab.com/ .
+Approved location answer: Salem Three Roads, opposite PV Mahal, Pallapatti. Previously verified postal address: 131, Pallappatty Village, Junction Main Road, Salem 636009. Source: https://balajiroboticrehab.com/contact-us/ . No inferred branches, map links, distances, travel times or WhatsApp capabilities. Internal ward/notification/approver contacts are not public numbers.
+
+## Unknown facts and clinical boundaries
+Unapproved: exact current slots, holiday exceptions, equipment details, onsite diagnostics, specialist procedures, individualized risks/evidence/eligibility, recovery or session counts, success rates, treatment/room/procedure prices, payment/refund rules and insurer approval/reimbursement. Seek team confirmation rather than importing old marketing promises. Only approved pre-visit instruction is bringing available medical records; no guessed fasting or medicine stopping. All immediate danger needs local emergency care without waiting for requests/callbacks/transfer; this rehab hospital has no emergency service.
+
+## Internal implementation note
+Behavior/consent/tool sequencing, 3-ring daytime overflow, 20:00-08:00 nighttime routing, ward destinations, staff notifications, CRM and recording belong in prompts/workflows, not caller-facing answers. Do not assume these integrations are active. No exact pilot dates, recording retention period, staff-response SLA or CRM status enums are inferred.
+Proposed save_appointment_request saves and queues human follow-up under actual attached schema; verified CRM intake can serve it without duplicates. Other proposed tools are save_staff_callback_request, notify_callback_staff, transfer_to_ward and save_call_summary; built-ins update_contact and manage_follow_up retain their actual schemas. Automated Anu callback is not human nurse/doctor callback. Original CUSTOMER_NAME/call_completed_summary labels are not assumed runtime variables/tool names.
+Language decision: approved English-letter Salem Tanglish plus English; Hindi from the older checklist is not enabled. Directional prompts retain all current dynamic variables, name-evidence/ownership and callback consent/proposal protocols. No direct calendar or WhatsApp booking-link instructions from earlier versions remain operative. Other patient-message tools need approved content, recipient rules and actual connection.
