@@ -5,21 +5,28 @@ const {executeAgentTool}=await import('../src/voice/tools/tool-executor.service.
 const agent={id:'agent',tenantId:'company',workspaceId:'workspace'};
 const profile={agent,tools:[updateContactTool]};
 const call={id:'call',agentId:agent.id,tenantId:agent.tenantId,workspaceId:agent.workspaceId};
-const toolCall={name:'update_contact',arguments:{name:'Ravi',evidence:'My name is Ravi'},currentUserMessage:'My name is Ravi',authorizationRecordId:updateContactTool.id};
+const toolCall={name:'update_contact',arguments:{name:'Ravi',evidence:'My name is Ravi',nameEvidence:'My name is Ravi',callerOwnNameConfirmed:true,confirmedReplacement:false},currentUserMessage:'My name is Ravi',authorizationRecordId:updateContactTool.id};
 assert.equal(authorizeCallerName(toolCall).allowed,true);
-for(const text of ['I am calling for Ravi','My mother is Ravi','Her name is Ravi','Ravi','My name is Ravi and my wife is Priya']) {
-  assert.equal(authorizeCallerName({...toolCall,currentUserMessage:text,arguments:{name:'Ravi',evidence:text}}).allowed,false);
+// Semantic decisions come from the LLM; the backend does not classify phrases.
+for(const text of ['I am calling for Ravi','My mother is Ravi','Her name is Ravi']) {
+  assert.equal(authorizeCallerName({...toolCall,currentUserMessage:text,arguments:{...toolCall.arguments,evidence:text,nameEvidence:text,callerOwnNameConfirmed:false}}).allowed,false);
 }
-assert.equal(authorizeCallerName({...toolCall,arguments:{name:'Priya',evidence:'My name is Ravi'}}).allowed,false);
-assert.equal(authorizeCallerName({...toolCall,currentUserMessage:'என் பெயர் ரவி',arguments:{name:'ரவி',evidence:'என் பெயர் ரவி'}}).allowed,true);
-assert.equal(authorizeCallerName({...toolCall,currentUserMessage:'Yes',arguments:{name:'Ravi',evidence:'Yes'}}).allowed,false);
-const nameReply={...toolCall,currentUserMessage:'Ravi',arguments:{name:'Ravi',evidence:'Ravi'},conversation:[{role:'assistant',content:'What is your name?'}]};
+assert.equal(authorizeCallerName({...toolCall,arguments:{...toolCall.arguments,name:'Priya'}}).allowed,false);
+for(const [name,text] of [['Ravi','You can call me Ravi'],['Ravi','Me llamo Ravi'],['\u0bb0\u0bb5\u0bbf','\u0b8e\u0ba9\u0bcd \u0baa\u0bc6\u0baf\u0bb0\u0bcd \u0bb0\u0bb5\u0bbf']]) {
+  assert.equal(authorizeCallerName({...toolCall,currentUserMessage:text,arguments:{...toolCall.arguments,name,evidence:text,nameEvidence:text}}).allowed,true);
+}
+assert.equal(authorizeCallerName({...toolCall,currentUserMessage:'Yes',arguments:{...toolCall.arguments,evidence:'Yes',nameEvidence:'Ravi'}}).allowed,false);
+const nameReply={...toolCall,currentUserMessage:'Ravi',arguments:{...toolCall.arguments,evidence:'Ravi',nameEvidence:'Ravi'},conversation:[{role:'assistant',content:'How would you like me to address you?'}]};
 assert.equal(authorizeCallerName(nameReply).allowed,true);
-assert.equal(authorizeCallerName({...nameReply,conversation:[{role:'assistant',content:'What is your patient name?'}]}).allowed,false);
-const confirmed={...toolCall,currentUserMessage:'Yes',arguments:{name:'Ravi',evidence:'Yes'},conversation:[
-  {role:'user',content:'My name is Ravi'},{role:'assistant',content:'Should I update your saved caller name to Ravi?'}]};
+assert.equal(authorizeCallerName({...nameReply,arguments:{...nameReply.arguments,callerOwnNameConfirmed:false}}).allowed,false);
+const confirmed={...toolCall,currentUserMessage:'That would be great, please do',arguments:{...toolCall.arguments,evidence:'That would be great, please do',confirmedReplacement:true},conversation:[
+  {role:'user',content:'My name is Ravi'},{role:'assistant',content:'May I replace the saved caller name with Ravi?'}]};
 assert.equal(authorizeCallerName(confirmed).confirmedReplacement,true);
-assert.equal(authorizeCallerName({...confirmed,conversation:[{role:'user',content:'Her name is Ravi'},{role:'assistant',content:'Should I update your saved caller name to Ravi?'}]}).allowed,false);
+assert.equal(authorizeCallerName({...confirmed,conversation:[{role:'assistant',content:'My name is Ravi'}]}).allowed,false);
+assert.equal(authorizeCallerName({...toolCall,arguments:{name:'Ravi',evidence:'My name is Ravi'}}).allowed,false);
+assert.equal(authorizeCallerName({...toolCall,arguments:{...toolCall.arguments,confirmedReplacement:'true'}}).allowed,false);
+assert.equal(authorizeCallerName({...toolCall,arguments:{...toolCall.arguments,evidence:'invented caller quote'}}).allowed,false);
+assert.equal(authorizeCallerName({...toolCall,arguments:{...toolCall.arguments,name:'123'}}).allowed,false);
 let existing=null,writes=0,audits=0;
 let stored={direction:'inbound',from_number:'+919123456789',to_number:'+918000000000',status:'connected',provider_metadata:{}};
 let selectedPhone;
@@ -57,4 +64,4 @@ stored={...stored,provider_metadata:{},status:'completed'};
 await assert.rejects(executeAgentTool(profile,call,toolCall,dependencies),e=>e.code==='CONTACT_UPDATE_CALL_UNAVAILABLE');
 const unsafe={...toolCall,arguments:{...toolCall.arguments,phone:'+919999999999'}};
 await assert.rejects(executeAgentTool(profile,call,unsafe,dependencies));
-console.log('PASS update_contact: own-name evidence, third-party rejection, Tamil, conflict confirmation, idempotency, audit, authorization, tenant/workspace scope, outbound recipient, browser/closed-call protection and strict arguments');
+console.log('PASS update_contact: grounded evidence, explicit LLM ownership decision, multilingual names, conflict confirmation, idempotency, audit, authorization, tenant/workspace scope, outbound recipient, browser/closed-call protection and strict arguments');

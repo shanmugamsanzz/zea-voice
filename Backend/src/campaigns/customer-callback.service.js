@@ -4,50 +4,9 @@ import { logger } from '../config/logger.js';
 
 const maxCallbackDelayMs = 30 * 24 * 60 * 60 * 1000;
 const minCallbackDelayMs = 30 * 1000;
-const numberWords = Object.freeze({
-  one: 1, two: 2, three: 3, four: 4, five: 5,
-  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-});
-const callbackIntent = /(?:call\s+me(?:\s+back)?|call\s+back|callback|call\s+pannu(?:nga)?|koopidu|kooppidu|கால்|கூப்பிட|அழை)/iu;
-const timeDirection = /(?:after|later|\bin\b|aprom|apram|கழித்து|பிறகு)/iu;
-const durationPattern = /(\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|வினாடி(?:கள்)?|நிமிட(?:ம்|ங்கள்)?|நிமிஷ(?:ம்|ங்கள்)?|மணி(?:நேரம்)?|நாட்கள்?|நாள்)/iu;
-
 function cleanText(value) {
   return String(value ?? '').normalize('NFC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/g, ' ').trim().slice(0, 1000);
-}
-
-function durationMilliseconds(amount, unit) {
-  if (/^(?:sec|வினாடி)/iu.test(unit)) return amount * 1000;
-  if (/^(?:hour|hr|மணி)/iu.test(unit)) return amount * 60 * 60 * 1000;
-  if (/^(?:day|நாள்|நாட்)/iu.test(unit)) return amount * 24 * 60 * 60 * 1000;
-  return amount * 60 * 1000;
-}
-
-export function resolveCustomerCallbackRequest(value, options = {}) {
-  const text = cleanText(value);
-  if (!text || !callbackIntent.test(text)) return Object.freeze({ detected: false, resolved: false });
-  if (!timeDirection.test(text)) {
-    return Object.freeze({ detected: true, resolved: false, reason: 'time_not_understood', requestText: text });
-  }
-  const match = text.match(durationPattern);
-  if (!match) return Object.freeze({ detected: true, resolved: false, reason: 'time_not_understood', requestText: text });
-  const amount = /^\d+$/.test(match[1]) ? Number(match[1]) : numberWords[match[1].toLowerCase()];
-  const delayMs = durationMilliseconds(amount, match[2]);
-  const minimumDelayMs = Math.max(minCallbackDelayMs, Number(options.minimumDelaySeconds ?? 30) * 1000);
-  const maximumDelayMs = Math.min(maxCallbackDelayMs, Number(options.maximumDelayDays ?? 30) * 86400000);
-  if (!Number.isFinite(delayMs) || delayMs < minimumDelayMs || delayMs > maximumDelayMs) {
-    return Object.freeze({ detected: true, resolved: false, reason: 'time_out_of_range', requestText: text });
-  }
-  const now = options.now instanceof Date ? options.now : new Date(options.now ?? Date.now());
-  return Object.freeze({
-    detected: true,
-    resolved: true,
-    source: 'relative_duration',
-    delayMs,
-    requestedFor: new Date(now.getTime() + delayMs).toISOString(),
-    requestText: text,
-  });
 }
 
 function runWithPlatformContext(dependencies, operation) {

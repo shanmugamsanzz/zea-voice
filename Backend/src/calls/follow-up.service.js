@@ -5,7 +5,7 @@ import { isCompanyCallQueueEnabled } from '../queues/company-queue-feature.js';
 import { assertOutboundQueueSpace } from '../queues/outbound-queue-capacity.service.js';
 import { resolveCallbackConfiguration } from '../voice/interaction/callback-config.js';
 import { scheduleCustomerCallback } from '../campaigns/customer-callback.service.js';
-import { resolveRelativeFollowUp,resolveLocalFollowUp } from './follow-up-time.js';
+import { resolveLocalFollowUp } from './follow-up-time.js';
 import { isConversationContinuityEnabled } from './conversation-feature.js';
 
 const clean=value=>String(value??'').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu,' ').replace(/\s+/g,' ').trim();
@@ -48,6 +48,8 @@ export async function cancelFollowUp(client,scope,id) {
 export async function manageLiveFollowUp(profile,call,toolCall,deps={}) {
   if(!deps.authorized)throw new AppError(403,'Follow-up action requires workflow authorization','FOLLOW_UP_NOT_AUTHORIZED');
   const args=toolCall.arguments??{},current=clean(toolCall.currentUserMessage);
+  if(!['schedule','confirm','cancel'].includes(args.action))return clarification('invalid_action','Provide a supported follow-up action.');
+  if(args.callerConfirmed!==true)return clarification('caller_confirmation_required','Interpret the current caller request or confirmation in context. Proceed only when the caller personally authorizes this action on their own number.');
   const structuredRelative=args.delayMinutes!==undefined;
   // The LLM supplies intent/duration; retain the actual runtime transcript
   // for audit and idempotency without requiring it to reproduce that text.
@@ -56,8 +58,6 @@ export async function manageLiveFollowUp(profile,call,toolCall,deps={}) {
     || typeof args.delayMinutes!=='number' || !Number.isFinite(args.delayMinutes) || args.delayMinutes<=0
     || args.localDate!==undefined || args.localTime!==undefined))return clarification('invalid_relative_request','Provide one structured duration for an explicitly requested callback, without absolute date/time fields.');
   if(!current || (!structuredRelative && (!evidence || !current.includes(evidence))))return clarification('caller_evidence_required','Ask the caller to explicitly request or confirm this follow-up.');
-  if(!structuredRelative && args.action!=='cancel' && /(?:don't|do not|never).*call|cancel|(?:he|she|they) (?:said|asked|wants)|my (?:wife|husband|mother|father|friend) (?:said|asked|wants)|on behalf|call (?:him|her|them)|அவருக்கு|அவங்களுக்கு|வேண்டாம்|ரத்து/iu.test(current))
-    return clarification('explicit_own_request_required','Clarify whether the current caller personally wants this follow-up on their own number.');
   const scope=profile.agent;
   if(call.tenantId!==scope.tenantId || call.workspaceId!==scope.workspaceId || call.agentId!==scope.id)throw new AppError(403,'Call scope mismatch','FOLLOW_UP_SCOPE_MISMATCH');
   if(args.action!=='cancel' && !isConversationContinuityEnabled(scope.tenantId))return {scheduled:false,reason:'conversation_continuity_disabled'};
@@ -77,7 +77,6 @@ export async function manageLiveFollowUp(profile,call,toolCall,deps={}) {
     if(!stored || !['ringing','connected'].includes(stored.status) || stored.provider_metadata?.source==='browser_test')throw new AppError(409,'A live phone conversation is required','FOLLOW_UP_CALL_UNAVAILABLE');
     if(stored.phone_e164!==(stored.direction==='inbound'?stored.from_number:stored.to_number))throw new AppError(409,'Contact does not match the current call','FOLLOW_UP_CONTACT_MISMATCH');
     if(args.action==='cancel') {
-      if(!/(?:cancel|do not call|don't call|ரத்து|வேண்டாம்)/iu.test(evidence) || /(?:don't|do not|never) cancel/iu.test(current))return clarification('cancel_confirmation_required','Ask which follow-up the caller wants to cancel.');
       const pending=await client.query(`SELECT id,purpose,scheduled_for FROM scheduled_follow_up_tasks
         WHERE tenant_id=$1 AND workspace_id=$2 AND conversation_id=$3 AND status IN ('scheduled','queued')
         ORDER BY scheduled_for,id LIMIT 10`,[scope.tenantId,scope.workspaceId,stored.conversation_id]);
@@ -95,16 +94,13 @@ export async function manageLiveFollowUp(profile,call,toolCall,deps={}) {
       proposal=stored.provider_metadata?.followUpProposal;
       const previous=[...(toolCall.conversation??[])].reverse().find(entry=>entry.role==='assistant')?.content??'';
       if(!proposal || Date.now()-new Date(proposal.createdAt).getTime()>900000
-        || !/^(?:yes|yes please|yes that is correct|confirm|correct|ஆம்|சரி)[.!]*$/iu.test(current)
         || ![proposal.localDate,proposal.localTime,proposal.timeZone].every(value=>clean(previous).includes(value))) {
         return clarification('explicit_confirmation_required','Repeat the exact proposed date, time and timezone and ask for confirmation.');
       }
     }else{
-      if(!structuredRelative && (!/(?:call\s+(?:me|back)|callback|remind\s+me|கால்|கூப்பிட|அழை|நினைவூட்டு|call pannu|koopidu)/iu.test(evidence)
-        || /(?:don't|do not|never).*call|cancel|வேண்டாம்|ரத்து/iu.test(evidence)))return clarification('explicit_request_required','Ask whether the caller wants a callback or reminder.');
       const relative=structuredRelative
         ? {resolved:true,requestedFor:new Date(Date.now()+args.delayMinutes*60000).toISOString()}
-        : resolveRelativeFollowUp(evidence,{...config});
+        : {resolved:false};
       const kind=args.kind??'callback',purpose=clean(args.purpose);
       if(!purpose)return clarification('purpose_required','Ask the purpose of the follow-up.');
       if(relative.resolved)proposal={kind,purpose,requestedFor:relative.requestedFor,timeZone:stored.timezone??'UTC',evidence};

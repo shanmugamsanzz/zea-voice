@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import {
-  resolveCustomerCallbackRequest,
   scheduleCustomerCallback,
 } from '../src/campaigns/customer-callback.service.js';
 import { finishAttempt } from '../src/campaigns/campaign-execution.service.js';
@@ -9,7 +8,6 @@ import {
   resolveCallbackConfiguration,
 } from '../src/voice/interaction/callback-config.js';
 
-const now = new Date('2026-07-24T10:00:00.000Z');
 const configured = resolveCallbackConfiguration({
   callbackEnabled: true,
   callbackMinimumDelaySeconds: 120,
@@ -30,27 +28,6 @@ for (const key of ['callbackFollowUpOpeningInstructions', 'callbackConfirmationI
   assert.equal(Object.hasOwn(normalizedCallback, key), false);
 }
 assert.throws(() => resolveCallbackConfiguration({ callbackMaximumDelayDays: 31 }), /between 1 and 30/);
-assert.equal(resolveCustomerCallbackRequest('call me after 1 minute', {
-  now, minimumDelaySeconds: configured.minimumDelaySeconds, maximumDelayDays: configured.maximumDelayDays,
-}).reason, 'time_out_of_range');
-const numeric = resolveCustomerCallbackRequest('Please call me after 5 minutes', { now });
-assert.equal(numeric.detected, true);
-assert.equal(numeric.resolved, true);
-assert.equal(numeric.delayMs, 300000);
-assert.equal(numeric.requestedFor, '2026-07-24T10:05:00.000Z');
-
-const words = resolveCustomerCallbackRequest('call me back in five minutes', { now });
-assert.equal(words.delayMs, 300000);
-const transliterated = resolveCustomerCallbackRequest('5 minutes ku apram call pannunga', { now });
-assert.equal(transliterated.resolved, true);
-const tamil = resolveCustomerCallbackRequest('5 நிமிடம் கழித்து கால் பண்ணுங்க', { now });
-assert.equal(tamil.resolved, true);
-assert.equal(tamil.delayMs, 300000);
-assert.equal(resolveCustomerCallbackRequest('I need package details', { now }).detected, false);
-assert.equal(resolveCustomerCallbackRequest('I will call you after 5 minutes', { now }).detected, false);
-assert.equal(resolveCustomerCallbackRequest('call me later', { now }).reason, 'time_not_understood');
-assert.equal(resolveCustomerCallbackRequest('call me after 90 days', { now }).reason, 'time_out_of_range');
-
 const queries = [];
 const queueJobs = [];
 const selected = {
@@ -67,6 +44,18 @@ const contextRunner = async (operation) => operation({
 });
 const queue = { add: async (...args) => { queueJobs.push(args); } };
 const future = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+// Structured timestamps still obey configured limits after removing text parsing.
+for (const requestedFor of ['invalid', new Date(Date.now() - 60000).toISOString(),
+  new Date(Date.now() + 90 * 86400000).toISOString()]) {
+  const rejected = await scheduleCustomerCallback({callId:'call-1', tenantId:'tenant-1', requestedFor}, {
+    contextRunner: () => assert.fail('Invalid times must not reach the database'), queue,
+  });
+  assert.equal(rejected.reason, 'callback_time_out_of_range');
+}
+assert.equal((await scheduleCustomerCallback({callId:'call-1', tenantId:'tenant-1',
+  requestedFor:new Date(Date.now()+60000).toISOString(),minimumDelaySeconds:configured.minimumDelaySeconds}, {
+    contextRunner: () => assert.fail('Configured minimum must be enforced'), queue,
+  })).reason, 'callback_time_out_of_range');
 const scheduled = await scheduleCustomerCallback({
   callId: 'call-1', tenantId: 'tenant-1', requestedFor: future,
   requestText: 'call me after five minutes',

@@ -19,8 +19,17 @@ assert.deepEqual(prepared.resolvedVariables,
 assert.doesNotMatch(prepared.text, /{{|\$\{/);
 assert.match(prepared.text, /Shanmugam/);
 assert.match(prepared.text, /(?:28 July|July 28),? 2026/);
-assert.match(prepared.text, /4950 rupees/);
-assert.match(prepared.text, /30 percent/);
+assert.match(prepared.text, /\u20b94,950/);
+assert.match(prepared.text, /30%/);
+
+// The prompt owns pronunciation, even when the configured language is Tamil.
+for (const language of ['en-IN', 'Tamil (India)']) {
+  const speechProcessor = createTtsTextPreprocessor({ language });
+  for (const text of ['Price is \u20b9100, 10% off. A & B.',
+    'Price is one hundred rupees.', '\u0bb5\u0bbf\u0bb2\u0bc8 \u0ba8\u0bc2\u0bb1\u0bc1 \u0bb0\u0bc2\u0baa\u0bbe\u0baf\u0bcd.']) {
+    assert.equal(speechProcessor.process(text).text, text);
+  }
+}
 
 const blocked = processor.process('Use {{missing_value}} and ${system.secret}. **Continue safely.**');
 assert.deepEqual(blocked.unresolvedVariables, ['missing_value', 'system.secret']);

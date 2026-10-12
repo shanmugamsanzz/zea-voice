@@ -3,6 +3,7 @@ import { env } from '../../../config/env.js';
 import { AppError } from '../../../middleware/errors.js';
 import { audioDurationMs, resolveModelAudioFormat } from '../../audio/audio-format.js';
 import { normalizeTtsEvent, normalizeTtsUsage } from './tts.interface.js';
+import { sanitizeTtsProviderMessage } from './provider-diagnostics.js';
 
 const normalizedKey = (value) => String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -127,14 +128,14 @@ export function synthesisInput(input) {
   return { text, generationId: value.generationId ?? randomUUID() };
 }
 
-export async function requireAudioResponse(response, providerConfig) {
+export async function requireAudioResponse(response, providerConfig, sensitiveValues = []) {
   if (response.ok && response.body?.getReader) return response;
   const details = await response.text?.().catch(() => '') ?? '';
   throw new AppError(response.status === 429 ? 503 : 502, 'Selected TTS provider request failed', 'TTS_PROVIDER_REQUEST_FAILED', {
     providerId: providerConfig.providerId,
     modelId: providerConfig.modelId,
     status: response.status,
-    providerMessage: details.slice(0, 500),
+    providerMessage: sanitizeTtsProviderMessage(details, sensitiveValues),
   });
 }
 

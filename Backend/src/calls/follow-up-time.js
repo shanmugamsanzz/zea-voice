@@ -1,10 +1,3 @@
-import { resolveCustomerCallbackRequest } from '../campaigns/customer-callback.service.js';
-
-export function resolveRelativeFollowUp(text, options={}) {
-  const value=String(text??'').normalize('NFKC');
-  if (/(?:don't|do not|never|not now).*call|cancel|ரத்து|வேண்டாம்/iu.test(value)) return {detected:false,resolved:false};
-  return resolveCustomerCallbackRequest(value.replace(/remind me/iu,'call me back'),options);
-}
 export function resolveLocalFollowUp(date,time,zone) {
   if(typeof zone!=='string'||!zone.trim())return {resolved:false,reason:'invalid_timezone'};
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date??'') || !/^\d{2}:\d{2}$/.test(time??''))return {resolved:false,reason:'date_time_required'};

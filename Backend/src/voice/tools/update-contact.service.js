@@ -3,45 +3,40 @@ import { AppError } from '../../middleware/errors.js';
 
 export const updateContactTool = Object.freeze({
   id:'builtin:update_contact',name:'update_contact',type:'internal_contact',
-  description:'Save only the current caller\'s explicitly stated own name. Use EXECUTE after a complete self-identification, never for a relative, patient, colleague, or someone they call for. Supply the exact caller evidence. If saved=false, ask the clarification question; never claim the name was saved. For a conflict ask whether to update the saved caller name, then invoke again only after confirmation.',
-  configuration:{inputSchema:{type:'object',additionalProperties:false,required:['name','evidence'],properties:{
+  description:'Save only the current caller\'s explicitly stated own name. Use EXECUTE after a complete self-identification, never for a relative, patient, colleague, or someone they call for. Decide self-identification and confirmation from the conversation in any language, not fixed keywords. Supply evidence from the current caller message, nameEvidence containing the stated name, callerOwnNameConfirmed, and confirmedReplacement. If saved=false, ask the clarification question; never claim the name was saved. For a conflict ask whether to update the saved caller name, then invoke again only after confirmation.',
+  configuration:{inputSchema:{type:'object',additionalProperties:false,required:['name','evidence','nameEvidence','callerOwnNameConfirmed','confirmedReplacement'],properties:{
     name:{type:'string',minLength:1,maxLength:240},evidence:{type:'string',minLength:1,maxLength:2000},
+    nameEvidence:{type:'string',minLength:1,maxLength:2000,description:'Exact quote from a current or recent caller message containing their own stated name.'},
+    callerOwnNameConfirmed:{type:'boolean',description:'True only when the conversation clearly establishes this is the current caller own name, not another person name.'},
+    confirmedReplacement:{type:'boolean',description:'True only when the current caller explicitly confirms replacing their saved name with this name; otherwise false.'},
   }}},
 });
-export const contactNameInstructions = 'The built-in update_contact tool saves the caller name immediately. When a caller explicitly states their own name, use EXECUTE with that name and an exact quote in evidence. Do not save names of people they mention or call for. Ambiguous names require clarification. A saved=false result means no name was written: ask the supplied clarification question. Never claim success until output.saved=true. A conflicting existing name needs a separate confirmation before replacement; never reveal the existing saved name. This records a name, not verified identity.';
+export const contactNameInstructions = 'The built-in update_contact tool saves the caller name immediately. When a caller explicitly states their own name, use EXECUTE with that name, an exact current-caller quote in evidence, an exact caller quote containing the name in nameEvidence, callerOwnNameConfirmed=true, and confirmedReplacement=false. Interpret the conversation in its language without requiring specific identification or confirmation words. Set confirmedReplacement=true only when the current caller clearly authorizes replacing the saved name with this name, including a clear correction request. Do not save names of people they mention or call for. Ambiguous names require clarification. A saved=false result means no name was written: ask the supplied clarification question. Never claim success until output.saved=true. A conflicting existing name needs a separate confirmation before replacement; never reveal the existing saved name. This records a name, not verified identity.';
 const normalize=value=>String(value??'').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu,' ').replace(/\s+/gu,' ').trim();
 const same=(a,b)=>normalize(a).toLocaleLowerCase()===normalize(b).toLocaleLowerCase();
-const thirdParty=/(?:calling (?:for|on behalf)|my (?:mother|father|wife|husband|son|daughter|brother|sister|friend|colleague|patient)|['’]s (?:mother|father|wife|husband|son|daughter)|(?:his|her|their) name|அவருடைய பெயர்|அவங்க பெயர்)/iu;
-function ownName(text,name) {
-  const value=normalize(text);
-  if(thirdParty.test(value))return false;
-  const match=value.match(/^(?:my name is|i am|i'm|this is|என் பெயர்|என்னுடைய பெயர்|en peyar|ennoda peru|en peru)\s+(.+?)[.!?।]*$/iu);
-  return Boolean(match&&same(match[1],name));
-}
-const ownNameQuestion=text=>/^(?:what(?: is|'s) your (?:full )?name|(?:may|can) i (?:know|have|get) your (?:full )?name|உங்கள் பெயர் என்ன|உங்க பெயர் என்ன)[?!.]*$/iu.test(normalize(text));
 export function authorizeCallerName(toolCall) {
-  const name=normalize(toolCall.arguments?.name);
-  const evidence=normalize(toolCall.arguments?.evidence);
+  const args=toolCall.arguments??{};
+  const name=normalize(args.name);
+  const evidence=normalize(args.evidence);
+  const nameEvidence=normalize(args.nameEvidence);
   const current=normalize(toolCall.currentUserMessage);
-  if(!name||Array.from(name).length>240||! /^[\p{L}\p{M}][\p{L}\p{M} .,'’\-]{0,239}$/u.test(name)) {
+  if(!name||Array.from(name).length>240||! /^[\p{L}\p{M}][\p{L}\p{M} .,'\u2019\-]{0,239}$/u.test(name)) {
     return {allowed:false,reason:'name_not_understood'};
   }
-  if(!evidence||!current.includes(evidence)||thirdParty.test(current))return {allowed:false,reason:'caller_identity_unclear'};
-  if(ownName(current,name))return {allowed:true,name,confirmedReplacement:false};
-  const history=(Array.isArray(toolCall.conversation)?toolCall.conversation:[]).slice(-12);
-  const assistant=history.filter(entry=>entry.role==='assistant').at(-1);
-  if(same(current,name)&&ownNameQuestion(assistant?.content))return {allowed:true,name,confirmedReplacement:false};
-  const directCorrection=current.match(/^(?:yes[, ]+)?(?:please )?(?:change|update|correct) my name to\s+(.+?)[.!?]*$/iu);
-  if(directCorrection&&same(directCorrection[1],name))return {allowed:true,name,confirmedReplacement:true};
-  const confirmed=/^(?:yes|yes please|yes that is correct|சரி|ஆம்|ஆமாம்)[.!?]*$/iu.test(current);
-  const question=normalize(assistant?.content);
-  const ownEvidence=history.some((entry,index)=>entry.role==='user'&&(
-    ownName(entry.content,name)||(same(entry.content,name)&&history[index-1]?.role==='assistant'&&ownNameQuestion(history[index-1].content))));
-  if(confirmed&&ownEvidence&&question.toLocaleLowerCase().includes(name.toLocaleLowerCase())
-    &&/(?:update|change|correct).*(?:your|saved|caller).*name|பெயர.*(?:மாற்ற|புதுப்பி)|(?:மாற்ற|புதுப்பி).*பெயர/iu.test(question)&&question.includes('?')) {
-    return {allowed:true,name,confirmedReplacement:true};
+  // The LLM interprets ownership and confirmation. Code checks the structured
+  // decision and grounds its evidence in caller messages, without phrase lists.
+  if(args.callerOwnNameConfirmed!==true||typeof args.confirmedReplacement!=='boolean'
+    ||!evidence||evidence.length>2000||!current.includes(evidence)
+    ||!nameEvidence||nameEvidence.length>2000
+    ||!nameEvidence.toLocaleLowerCase().includes(name.toLocaleLowerCase())) {
+    return {allowed:false,reason:'caller_identity_unclear'};
   }
-  return {allowed:false,reason:'caller_identity_unclear'};
+  const history=(Array.isArray(toolCall.conversation)?toolCall.conversation:[]).slice(-12);
+  const callerMessages=[current,...history.filter(entry=>entry.role==='user').map(entry=>normalize(entry.content))];
+  if(!callerMessages.some(message=>message.includes(nameEvidence))) {
+    return {allowed:false,reason:'caller_identity_unclear'};
+  }
+  return {allowed:true,name,confirmedReplacement:args.confirmedReplacement};
 }
 export async function updateCallerContact(runtimeProfile,call,toolCall,dependencies={}) {
   if(dependencies.authorized!==true)throw new AppError(403,'Contact update is not authorized','CONTACT_UPDATE_NOT_AUTHORIZED');

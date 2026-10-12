@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../../middleware/errors.js';
+import { logger } from '../../../config/logger.js';
+import { cartesiaFailureDiagnostics } from './provider-diagnostics.js';
 import { audioDurationMs } from '../../audio/audio-format.js';
 import {
   createTtsRequestState, firstPronunciationDictionary, parameter, parseSse,
@@ -71,11 +73,14 @@ export function createCartesiaTtsAdapter({ providerConfig, runtimeContext = {} }
         const response = await fetchImpl(configuration.endpoint, {
           method: 'POST', headers, signal: request.controller.signal, body: JSON.stringify(body),
         });
-        await requireAudioResponse(response, providerConfig);
+        await requireAudioResponse(response, providerConfig,
+          [configuration.apiKey, configuration.accessToken, synthesis.text]);
         for await (const raw of parseSse(response.body)) {
           let event;
           try { event = JSON.parse(raw); } catch { throw new AppError(502, 'Cartesia returned invalid streaming JSON', 'TTS_STREAM_JSON_INVALID'); }
-          if (event.type === 'error') throw new AppError(502, event.message ?? event.title ?? 'Cartesia synthesis failed', 'TTS_PROVIDER_REQUEST_FAILED');
+          if (event.type === 'error') throw new AppError(502, 'Cartesia synthesis failed', 'TTS_PROVIDER_REQUEST_FAILED', {
+            status: event.status_code, providerMessage: event.message ?? event.title ?? 'Cartesia synthesis failed',
+          });
           if (event.type !== 'chunk' || !event.data) continue;
           const audio = Buffer.from(event.data, 'base64');
           if (!audio.length) continue;
@@ -92,7 +97,13 @@ export function createCartesiaTtsAdapter({ providerConfig, runtimeContext = {} }
       } catch (error) {
         const failure = ttsFailure(error, request, providerConfig);
         if (!failure) yield normalizeTtsEvent({ type: 'cancelled', reason: request.cancelReason }, { ...providerConfig, generationId: request.generationId });
-        else yield ttsErrorEvent(failure, providerConfig, request.generationId);
+        else {
+          (runtimeContext.log ?? logger).error({
+            ...cartesiaFailureDiagnostics(failure, configuration, synthesis.text),
+            generationId: request.generationId,
+          }, 'Cartesia TTS request failed (sanitized provider diagnostics)');
+          yield ttsErrorEvent(failure, providerConfig, request.generationId);
+        }
       } finally { request.finish(); }
     },
     cancel: (reason) => state.cancel(reason),

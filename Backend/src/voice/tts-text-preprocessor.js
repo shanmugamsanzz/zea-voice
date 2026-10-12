@@ -70,7 +70,6 @@ function replaceIsoDates(text, locale, timeZone) {
 }
 
 function normalizeSpeakableText(value, locale, timeZone) {
-  const tamil = locale.toLowerCase().startsWith('ta');
   let text = String(value ?? '').normalize('NFC');
   text = text
     .replace(/\[([^\]]+)]\(https?:\/\/[^)]+\)/gi, '$1')
@@ -79,9 +78,6 @@ function normalizeSpeakableText(value, locale, timeZone) {
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[*_`#]+/g, ' ');
   text = replaceIsoDates(text, locale, timeZone)
-    .replace(/₹\s*([\d,]+(?:\.\d+)?)/g, (_, amount) => `${amount.replace(/,/g, '')} ${tamil ? 'ரூபாய்' : 'rupees'}`)
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, (_, amount) => `${amount} ${tamil ? 'சதவீதம்' : 'percent'}`)
-    .replace(/\s*&\s*/g, tamil ? ' மற்றும் ' : ' and ')
     .replace(/[\[\]{}<>|~^]+/g, ' ')
     .replace(/([!?.,])\1{1,}/g, '$1')
     .replace(/\s+([,.!?])/g, '$1')
