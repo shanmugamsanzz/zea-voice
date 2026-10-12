@@ -27,6 +27,7 @@ import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-templat
 import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
 import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
+import { CallerTurnWait } from './interruption/caller-turn-wait.js';
 import {
   exactConfiguredPhrase,
   validateFinalCustomerTurn,
@@ -307,6 +308,7 @@ export class RealtimeConversationOrchestrator {
     this.sttReconnectPromise = null;
     this.interruptionConfirmationPromise = null;
     this.customerUtterance = new CustomerUtteranceBuffer();
+    this.callerTurnWait = new CallerTurnWait();
     this.shortTurnMerger = new ShortTurnMerger();
     this.recentFinalTurns = new Map();
     this.cancelledEpochs = new Set();
@@ -1155,7 +1157,8 @@ export class RealtimeConversationOrchestrator {
       this.activeCustomerSpeechStartedAt = Date.now();
       this.audioEngine?.setCallerSpeaking?.(true);
       this.#clearInactivity();
-      this.customerUtterance.start();
+      if (this.callerTurnWait.cancel()) this.customerUtterance.resumeSpeech();
+      else this.customerUtterance.start();
       this.#recordInterruptionTrace('speech_started', {
         state: this.controller.state,
         epoch: this.epoch,
@@ -1168,6 +1171,10 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'partial_transcript') {
+      if (this.callerTurnWait.cancel()) {
+        this.customerUtterance.resumeSpeech();
+        this.#clearInactivity();
+      }
       const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
       const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
       const buffered = this.customerUtterance.observePartial(event.text);
@@ -1231,12 +1238,31 @@ export class RealtimeConversationOrchestrator {
     if (!eventPolicy.processCallerTurn) return;
     this.audioEngine?.setCallerSpeaking?.(false);
     this.#clearInactivity();
-    if (!event.bufferedFinal) this.customerUtterance.observeFinal(event.text, event.confidence);
+    if (!event.bufferedFinal) {
+      if (this.callerTurnWait.cancel()) this.customerUtterance.resumeSpeech();
+      this.customerUtterance.observeFinal(event.text, event.confidence);
+    }
     // `final_transcript` is a provider-neutral endpoint. Most adapters also
     // emit speech_ended first, but accepting a final event on its own keeps a
     // valid caller question from waiting forever when a provider omits that
     // separate signal.
     if (!this.customerUtterance.speechEnded) this.customerUtterance.markSpeechEnded();
+    const callerWaitMs = this.interactionConfiguration.callerTurnWaitMs;
+    if (!event.callerWaitElapsed && callerWaitMs > 0
+      && this.controller.state === callStates.LISTENING && this.customerUtterance.ready) {
+      this.callerTurnWait.schedule(callerWaitMs, () => {
+        if (this.finalized || this.closing) return;
+        const buffered = this.customerUtterance.snapshot();
+        if (!buffered.ready) return;
+        void this.#guard('stt', () => this.#handleSttEvent({
+          type: 'final_transcript', text: buffered.finalText,
+          confidence: buffered.finalConfidence, bufferedFinal: true, callerWaitElapsed: true,
+        }));
+      });
+      this.log.debug({ stage: 'stt.caller_turn_wait', callId: this.call.id, waitMs: callerWaitMs },
+        'Waiting for caller continuation before dispatching the turn');
+      return;
+    }
     if (!this.customerUtterance.ready || !this.customerUtterance.markFinalProcessed()) {
       this.#armInactivity();
       return;
@@ -3415,6 +3441,7 @@ export class RealtimeConversationOrchestrator {
     const finalOutcome = callbackNeedsManualFollowUp ? 'manual_follow_up_required' : outcome;
     const finalReason = callbackNeedsManualFollowUp ? 'callback_time_not_provided' : reason;
     this.finalized = true;
+    this.callerTurnWait.cancel();
     this.#clearInactivity();
     this.#clearCallDuration();
     this.interruptionCandidate?.reset();

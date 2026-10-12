@@ -58,6 +58,15 @@ export class CustomerUtteranceBuffer {
     return this.snapshot();
   }
 
+  resumeSpeech() {
+    // Preserve finalized fragments across a thinking pause before dispatch.
+    this.continuationPrefix = this.text;
+    this.partialText = '';
+    this.finalText = '';
+    this.speechEnded = false;
+    this.finalProcessed = false;
+  }
+
   get ready() { return this.speechEnded && Boolean(this.finalText) && !this.finalProcessed; }
 
   markFinalProcessed() {
@@ -66,10 +75,17 @@ export class CustomerUtteranceBuffer {
     return true;
   }
 
-  get text() { return this.finalText || this.partialText; }
+  get text() {
+    const fragment = this.finalText || this.partialText;
+    if (!this.continuationPrefix) return fragment;
+    if (!fragment) return this.continuationPrefix;
+    if (comparison(fragment).startsWith(comparison(this.continuationPrefix))) return fragment;
+    return `${this.continuationPrefix} ${fragment}`;
+  }
 
   reset() {
     this.started = false;
+    this.continuationPrefix = '';
     this.partialText = '';
     this.finalText = '';
     this.finalConfidence = null;

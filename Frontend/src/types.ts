@@ -135,6 +135,7 @@ export interface VoiceAgent {
   interruptionPolicy?: 'any' | 'all';
   interruptionSensitivityLabel?: string;
   speechConfirmationDelayMs?: number;
+  callerTurnWaitMs?: number;
   minimumMeaningfulWords?: number;
   acknowledgementPhrases?: string[];
   explicitStopPhrases?: string[];

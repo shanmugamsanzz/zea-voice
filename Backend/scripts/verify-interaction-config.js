@@ -8,6 +8,7 @@ import {
 } from '../src/voice/interaction/interaction-config.js';
 
 assert.deepEqual(resolveInteractionConfiguration({}), {
+  callerTurnWaitMs: 0,
   greetingMode: greetingModes.AGENT_INITIATES,
   cachePolicy: cachePolicies.PERSISTENT_24H,
 });
@@ -17,6 +18,7 @@ assert.deepEqual(resolveInteractionConfiguration({
   cachePolicy: '24h Persistent',
   contextId: 'Optional',
 }), {
+  callerTurnWaitMs: 0,
   greetingMode: greetingModes.AGENT_INITIATES,
   cachePolicy: cachePolicies.PERSISTENT_24H,
 });
@@ -26,6 +28,7 @@ assert.deepEqual(resolveInteractionConfiguration({
   cachePolicy: 'Session Only',
   contextId: 'crm:lead/123-ABC',
 }), {
+  callerTurnWaitMs: 0,
   greetingMode: greetingModes.USER_INITIATES,
   cachePolicy: cachePolicies.SESSION_ONLY,
 });
@@ -33,6 +36,7 @@ assert.deepEqual(resolveInteractionConfiguration({
 const original = { greetingMode: 'user_initiates', cachePolicy: 'Disabled', custom: true };
 const normalized = normalizeInteractionSettings(original);
 assert.deepEqual(normalized, {
+  callerTurnWaitMs: 0,
   greetingMode: greetingModes.USER_INITIATES,
   cachePolicy: cachePolicies.DISABLED,
   custom: true,

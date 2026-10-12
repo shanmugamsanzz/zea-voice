@@ -60,7 +60,15 @@ export function normalizeContextId(value, { strict = false } = {}) {
 }
 
 export function resolveInteractionConfiguration(settings = {}, { strict = false } = {}) {
+  const requestedWait = Number(settings.callerTurnWaitMs ?? 0);
+  if (strict && (!Number.isInteger(requestedWait) || requestedWait < 0 || requestedWait > 5000)) {
+    const error = new TypeError('Caller speech waiting time must be 0-5000 milliseconds');
+    error.code = 'VOICE_INTERACTION_CONFIG_INVALID';
+    error.field = 'callerTurnWaitMs';
+    throw error;
+  }
   return Object.freeze({
+    callerTurnWaitMs: Number.isInteger(requestedWait) && requestedWait >= 0 && requestedWait <= 5000 ? requestedWait : 0,
     greetingMode: alias(
       settings.greetingMode,
       greetingAliases,
@@ -84,6 +92,7 @@ export function normalizeInteractionSettings(settings = {}) {
     ...settings,
     greetingMode: interaction.greetingMode,
     cachePolicy: interaction.cachePolicy,
+    callerTurnWaitMs: interaction.callerTurnWaitMs,
   };
   delete normalized.contextId;
   return normalized;

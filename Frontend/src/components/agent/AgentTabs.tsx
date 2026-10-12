@@ -109,6 +109,41 @@ function normalizeConversationContextMode(value: unknown): 'last_n_turns' | 'ful
     : 'last_n_turns';
 }
 
+function CallerSpeechWaitControl({ value, onChange, disabled }: {
+  value: number; onChange: (milliseconds: number) => void; disabled: boolean;
+}) {
+  const [unit, setUnit] = useState<'ms' | 's'>('ms');
+  const presets = [{ name: 'Quick', ms: 600 }, { name: 'Balanced', ms: 1000 }, { name: 'Patient', ms: 1500 }];
+  const selected = presets.find((preset) => preset.ms === value)?.name ?? 'Custom';
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+      <h3 className="font-extrabold text-slate-800">Wait after caller stops speaking</h3>
+      <p className="text-xs text-slate-500">Allow time for thinking pauses. If the caller resumes, keep listening and combine their speech before answering.</p>
+      <div className="flex flex-wrap gap-2">
+        {presets.map((preset) => <button key={preset.name} type="button" disabled={disabled}
+          onClick={() => onChange(preset.ms)} aria-pressed={selected === preset.name}
+          className={`rounded-lg border px-3 py-2 text-xs font-bold ${selected === preset.name ? 'border-amber-500 bg-amber-50' : 'border-slate-200'}`}>
+          {preset.name} ({preset.ms / 1000}s)
+        </button>)}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-bold">Custom wait</label>
+        <input aria-label="Caller speech wait" type="number" disabled={disabled} min={0}
+          max={unit === 's' ? 5 : 5000} step={unit === 's' ? 0.1 : 100}
+          value={unit === 's' ? value / 1000 : value}
+          onChange={(event) => onChange(Math.round(Number(event.target.value) * (unit === 's' ? 1000 : 1)))}
+          className="w-28 rounded-lg border border-slate-200 px-3 py-2" />
+        <select aria-label="Caller speech wait unit" value={unit} disabled={disabled}
+          onChange={(event) => setUnit(event.target.value as 'ms' | 's')}
+          className="rounded-lg border border-slate-200 px-3 py-2">
+          <option value="ms">Milliseconds</option><option value="s">Seconds</option>
+        </select>
+      </div>
+      <p className="text-xs text-slate-500">0 disables the additional wait. Range: 0–5 seconds. This is separate from interruption and inactivity reminders.</p>
+    </div>
+  );
+}
+
 function legacySpeechConfirmationDelay(settings: Record<string, unknown>) {
   const configured = Number(settings.speechConfirmationDelayMs);
   if (Number.isFinite(configured)) return Math.min(1500, Math.max(150, Math.round(configured)));
@@ -357,6 +392,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       conversationContextTurns: Number(savedSettings.conversationContextTurns ?? 5),
       wordBasedInterruptionEnabled: true,
       speechConfirmationDelayMs: legacySpeechConfirmationDelay(savedSettings),
+      callerTurnWaitMs: Number(savedSettings.callerTurnWaitMs ?? 0),
       minimumMeaningfulWords: Number(savedSettings.minimumMeaningfulWords ?? savedSettings.wordInterruptionMinWords ?? 2),
       acknowledgementPhrases: Array.isArray(savedSettings.acknowledgementPhrases) && savedSettings.acknowledgementPhrases.length
         ? savedSettings.acknowledgementPhrases.map(String)
@@ -573,6 +609,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
     if (callCheckResponse.length > 500) {
       setError('Call Check Response cannot exceed 500 characters.'); return;
+    }
+    if (!Number.isInteger(agent.callerTurnWaitMs ?? 0) || (agent.callerTurnWaitMs ?? 0) < 0 || (agent.callerTurnWaitMs ?? 0) > 5000) {
+      setError('Caller speech waiting time must be between 0 and 5 seconds.'); return;
     }
     setSaving(true); setError('');
     try {
@@ -1209,6 +1248,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             </div>
 
             {/* Transcript-confirmed interruption control */}
+            <CallerSpeechWaitControl value={agent.callerTurnWaitMs ?? 0}
+              onChange={(value) => setAgent({ ...agent, callerTurnWaitMs: value })} disabled={isReadOnly} />
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="p-6">
                 <div className="flex items-center justify-between">
