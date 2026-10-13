@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { resolveMaxInactivityPrompts } from './agent-control-defaults.js';
 import { AppError } from '../middleware/errors.js';
 import { CallStateMachine, callStates } from './call-state-machine.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
@@ -158,9 +159,7 @@ export class CallController {
   async handleSilence(now = Date.now()) {
     if (this.state !== callStates.LISTENING) return { action: 'none' };
     this.#silenceCount += 1;
-    const configuredMaxPrompts = Number(this.#profile.agent.settings?.maxInactivityPrompts ?? 1);
-    const maxPrompts = Number.isInteger(configuredMaxPrompts)
-      && configuredMaxPrompts >= 1 && configuredMaxPrompts <= 10 ? configuredMaxPrompts : 1;
+    const maxPrompts = resolveMaxInactivityPrompts(this.#profile.agent.settings);
     const message = String(this.#profile.agent.settings?.silentMessage ?? '').trim();
     if (this.#silenceCount <= maxPrompts && message) {
       await this.#transition(callStates.THINKING, 'inactivity_prompt', now);

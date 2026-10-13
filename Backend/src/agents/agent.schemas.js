@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import { agentControlDefaults } from '../voice/agent-control-defaults.js';
 
 const systemPromptSchema = z.string().trim().min(1).refine(
   (value) => Array.from(value).length <= env.LLM_SYSTEM_PROMPT_MAX_CHARS,
@@ -25,9 +26,9 @@ const fields = {
   previousSummaryCount: z.number().int().min(0).max(10).optional(),
   previousSummaryMaxChars: z.number().int().min(500).max(20000).optional(),
   temperature: z.number().min(0).max(2).default(0.7),
-  interruptionSensitivity: z.number().min(0).max(1).default(0.3),
-  silenceTimeoutMs: z.number().int().min(100).max(120000).default(600),
-  inactivityTimeoutSeconds: z.number().int().min(1).max(3600).default(5),
+  interruptionSensitivity: z.number().min(0).max(1).default(agentControlDefaults.interruptionSensitivity),
+  silenceTimeoutMs: z.number().int().min(100).max(120000).default(agentControlDefaults.silenceTimeoutMs),
+  inactivityTimeoutSeconds: z.number().int().min(1).max(3600).default(agentControlDefaults.inactivityTimeoutSeconds),
   settings: z.record(z.string(), z.unknown()).default({}),
 };
 export const createAgentSchema = z.object(fields);

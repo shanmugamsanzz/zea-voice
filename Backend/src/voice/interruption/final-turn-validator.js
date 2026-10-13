@@ -1,4 +1,5 @@
 const wordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'â€™_-]*/gu;
+import { agentControlDefaults } from '../agent-control-defaults.js';
 function normalized(value) {
   return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
 }
@@ -39,7 +40,7 @@ function confidenceValue(value) {
 export function validateFinalCustomerTurn({
   text,
   confidence,
-  minimumWords = 2,
+  minimumWords = agentControlDefaults.minimumMeaningfulWords,
   acknowledgementPhrases = [],
   rejectAcknowledgement = false,
   minimumConfidence = 0.55,
@@ -55,7 +56,7 @@ export function validateFinalCustomerTurn({
   if (resolvedConfidence !== null && resolvedConfidence < minimumConfidence) {
     return { accepted: false, reason: 'low_confidence', text: finalText, confidence: resolvedConfidence };
   }
-  const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || 2));
+  const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || agentControlDefaults.minimumMeaningfulWords));
   if (finalTokens.length < configuredMinimum) {
     return {
       accepted: true, text: finalText,

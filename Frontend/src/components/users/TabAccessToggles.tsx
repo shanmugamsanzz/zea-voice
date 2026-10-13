@@ -16,7 +16,7 @@ export function TabAccessToggles({ value, onChange, role }: {
           onChange={event => {
             const selected = value ?? companyTabs.map(([key]) => key);
             onChange(event.target.checked ? [...new Set([...selected, id])] : selected.filter(key => key !== id));
-          }} className="h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-slate-300 transition checked:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-600 before:block before:h-4 before:w-4 before:translate-x-0.5 before:translate-y-0.5 before:rounded-full before:bg-white before:shadow before:transition-transform checked:before:translate-x-[18px]" />
+          }} className="h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-slate-300 transition checked:bg-[#202320] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#202320] before:block before:h-4 before:w-4 before:translate-x-0.5 before:translate-y-0.5 before:rounded-full before:bg-white before:shadow before:transition-transform checked:before:translate-x-[18px]" />
       </label>;
     })}</div>
   </fieldset>;

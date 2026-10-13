@@ -24,6 +24,17 @@ const configured = resolveInterruptionConfiguration({
   acknowledgementPhrases: [' ம் ', 'ok', 'ok'],
   explicitStopPhrases: [' wait ', 'stop'],
 });
+const savedUi = resolveInterruptionConfiguration({
+  timeBasedInterruptionEnabled: false, speechConfirmationDelayMs: 650,
+  minimumMeaningfulWords: 1, explicitStopPhrases: ['Configured phrase'],
+  acknowledgementPhrases: ['Configured acknowledgement'],
+}, 0.1);
+assert.equal(savedUi.timeBased.enabled, false, 'Saved OFF must not become default ON');
+assert.equal(savedUi.wordBased.enabled, false);
+assert.equal(savedUi.timeBased.thresholdMs, 650, 'Saved delay overrides legacy sensitivity defaults');
+assert.equal(savedUi.wordBased.minimumWords, 1, 'Saved one-word threshold overrides the default');
+assert.deepEqual(savedUi.explicitStopPhrases, ['Configured phrase']);
+assert.deepEqual(savedUi.acknowledgementPhrases, ['Configured acknowledgement']);
 assert.equal(configured.timeBased.thresholdMs, 350);
 assert.equal(configured.wordBased.minimumWords, 2);
 assert.deepEqual(configured.acknowledgementPhrases, ['ம்', 'ok']);

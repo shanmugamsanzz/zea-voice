@@ -1,4 +1,5 @@
-const thresholdBySensitivity = { low: 700, medium: 350, high: 150 };
+import { agentControlDefaults } from '../agent-control-defaults.js';
+const thresholdBySensitivity = { low: 700, medium: agentControlDefaults.speechConfirmationDelayMs, high: 150 };
 
 export const defaultAcknowledgementPhrases = Object.freeze([]);
 
@@ -41,16 +42,16 @@ function boundedInteger(value, fallback, minimum, maximum) {
 
 function legacyDelay(settings, numericSensitivity) {
   const explicit = Number(settings.speechConfirmationDelayMs);
-  if (Number.isFinite(explicit)) return boundedInteger(explicit, 350, 150, 1500);
+  if (Number.isFinite(explicit)) return boundedInteger(explicit, agentControlDefaults.speechConfirmationDelayMs, 150, 1500);
   return thresholdBySensitivity[sensitivity(settings.interruptionSensitivityLabel, numericSensitivity)];
 }
 
-export function resolveInterruptionConfiguration(settings = {}, numericSensitivity = 0.3) {
+export function resolveInterruptionConfiguration(settings = {}, numericSensitivity = agentControlDefaults.interruptionSensitivity) {
   const confirmationDelayMs = legacyDelay(settings, numericSensitivity);
   const configuredMinimum = settings.minimumMeaningfulWords
     ?? settings.wordInterruptionMinWords
     ?? settings.minimumInterruptionWords
-    ?? 2;
+    ?? agentControlDefaults.minimumMeaningfulWords;
   // `wordInterruptionTriggerWords` is retained only as a legacy alias. New
   // agents use explicitStopPhrases, while acknowledgement phrases are stored
   // separately for the transcript classifier added in the next task.
@@ -60,14 +61,14 @@ export function resolveInterruptionConfiguration(settings = {}, numericSensitivi
     ?? defaultExplicitStopPhrases, defaultExplicitStopPhrases);
   return Object.freeze({
     timeBased: Object.freeze({
-      enabled: boolean(settings.timeBasedInterruptionEnabled, true),
+      enabled: boolean(settings.timeBasedInterruptionEnabled, agentControlDefaults.interruptionEnabled),
       thresholdMs: confirmationDelayMs,
     }),
     wordBased: Object.freeze({
       // The old independent Word Based toggle is deprecated. The main
       // interruption toggle now controls the whole transcript-confirmed flow.
-      enabled: boolean(settings.timeBasedInterruptionEnabled, true),
-      minimumWords: boundedInteger(configuredMinimum, 2, 1, 3),
+      enabled: boolean(settings.timeBasedInterruptionEnabled, agentControlDefaults.interruptionEnabled),
+      minimumWords: boundedInteger(configuredMinimum, agentControlDefaults.minimumMeaningfulWords, 1, 3),
       triggerWords: Object.freeze(explicitStopPhrases),
     }),
     acknowledgementPhrases: Object.freeze(configuredPhrases(
@@ -78,7 +79,7 @@ export function resolveInterruptionConfiguration(settings = {}, numericSensitivi
   });
 }
 
-export function normalizeInterruptionSettings(settings = {}, numericSensitivity = 0.3) {
+export function normalizeInterruptionSettings(settings = {}, numericSensitivity = agentControlDefaults.interruptionSensitivity) {
   const config = resolveInterruptionConfiguration(settings, numericSensitivity);
   return {
     ...settings,

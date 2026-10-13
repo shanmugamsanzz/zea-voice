@@ -12,6 +12,7 @@ import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-compl
 import { CallController } from './call-controller.js';
 import { TranscriptPersistenceQueue } from './transcript-persistence-queue.js';
 import { TtsCharacterBudget } from './tts-character-budget.js';
+import { hasSpeakableText } from './tts-speakable-text.js';
 import { callStates } from './call-state-machine.js';
 import { ProviderUsageTracker } from './provider-usage-tracker.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
@@ -1767,7 +1768,11 @@ export class RealtimeConversationOrchestrator {
         return false;
       }
       const sentence = this.#fitTtsMessage(rawSentence);
-      if (!sentence) return false;
+      if (!hasSpeakableText(sentence)) {
+        this.log.warn({ stage: 'tts.non_speech_skipped', callId: this.call.id,
+          acknowledgement }, 'Non-speech content was skipped before TTS');
+        return false;
+      }
       const sentenceCharacters = Array.from(sentence).length;
       if (!acknowledgement && maximumResponseCharacters > 0
         && spokenCharacters + sentenceCharacters > maximumResponseCharacters) {
@@ -1937,6 +1942,12 @@ export class RealtimeConversationOrchestrator {
         if (played && !acknowledgement) completedSentences.push(played?.spokenText ?? sentence);
         return played;
       }).catch((error) => {
+        if (acknowledgement) {
+          this.log.warn({ err: error, stage: 'tts.acknowledgement_failure_ignored',
+            callId: this.call.id, generationId },
+          'Optional acknowledgement failed; final response continues');
+          return false;
+        }
         sentenceFailures.push(Object.freeze({
           error, generationId, sentenceNumber: currentSentenceNumber, sentence,
         }));
@@ -3329,7 +3340,9 @@ export class RealtimeConversationOrchestrator {
       message: String(error?.message ?? 'Voice runtime error').slice(0, 500),
       retryable: error?.retryable !== false,
     });
-    this.errorCount += 1;
+    const recoverableTts = stage !== 'audio_output' && error?.retryable !== false
+      && (stage.startsWith('tts') || String(error?.code ?? '').startsWith('TTS_'));
+    if (!recoverableTts) this.errorCount += 1;
     const kind = stage === 'stt' ? 'stt' : (stage.startsWith('tts') || stage === 'audio_output' ? 'tts' : (stage.startsWith('llm') || stage === 'turn' ? 'llm' : null));
     this.#recordProviderFailure(
       stage === 'audio_output' ? 'audioTransport' : (kind ?? 'tts'),
@@ -3377,15 +3390,11 @@ export class RealtimeConversationOrchestrator {
       }
     }
     await this.#cancelActive(`${stage}_recovery`);
-    const ttsFailed = stage === 'audio_output' || stage.startsWith('tts')
-      || String(error?.code ?? '').startsWith('TTS_');
-    if (ttsFailed) {
-      this.log.error({
-        stage: 'voice.audible_recovery_unavailable', callId: this.call.id,
-        errorCode: error?.code, failureStage: stage,
-      }, 'TTS recovery is unavailable; ending instead of silently returning to listening');
-      await this.#finalize('failed', error?.code ?? 'tts_recovery_unavailable');
-      if (!this.mediaSession.closed) this.mediaSession.close(1011, 'audible recovery unavailable');
+    if (recoverableTts && this.controller.state === callStates.LISTENING) {
+      this.log.warn({ stage: 'voice.tts_failure_call_preserved', callId: this.call.id,
+        errorCode: error?.code, failureStage: stage },
+      'Recoverable TTS failure preserved the call; awaiting the next caller turn');
+      this.#armInactivity();
       return;
     }
     if (this.controller.state !== callStates.LISTENING) {

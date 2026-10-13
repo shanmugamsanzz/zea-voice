@@ -1,12 +1,15 @@
 export const TEMPLATE_ENGINE_TURN_LATENCY_VERSION = 2;
 
+import { hasSpeakableText } from '../tts-speakable-text.js';
+
 function cleanText(value, maximum = 500) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
 
 export function resolveConfiguredLatencyAcknowledgement({ configuredText = '' } = {}) {
-  return Object.freeze({ text: cleanText(configuredText) });
+  const text = cleanText(configuredText);
+  return Object.freeze({ text: hasSpeakableText(text) ? text : '' });
 }
 
 export function latencyAcknowledgementEligibleForRoute({
@@ -30,7 +33,8 @@ export function armTemplateEngineTurnLatencyAcknowledgement({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
-  const text = cleanText(acknowledgementText);
+  const cleanedText = cleanText(acknowledgementText);
+  const text = hasSpeakableText(cleanedText) ? cleanedText : '';
   const delayMs = Number(thresholdMs);
   let timer = null;
   let cancelled = false;

@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { TableActionsMenu } from '../common/TableActionsMenu';
+import { CampaignDeleteDialog, type CampaignDeletePreview } from '../campaigns/CampaignDeleteDialog';
 import { COMPLETED_CALL_LOGS } from '../../lib/mockData';
 import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
 import { 
@@ -672,6 +673,21 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const [campaignsLoading, setCampaignsLoading] = useState(true);
   const [campaignsError, setCampaignsError] = useState('');
   const [submittingCampaign, setSubmittingCampaign] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{id: string; name: string} | null>(null);
+  const [deletePreview, setDeletePreview] = useState<CampaignDeletePreview | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingCampaign, setDeletingCampaign] = useState(false);
+  useEffect(() => {
+    setDeletePreview(null); setDeleteError('');
+    if (!deleteTarget) return;
+    const controller = new AbortController();
+    apiRequest<CampaignDeletePreview>(`/campaigns/${deleteTarget.id}/deletion-preview`, {
+      signal: controller.signal, zeaCache: 'bypass',
+    }).then(setDeletePreview).catch(error => {
+      if (!controller.signal.aborted) setDeleteError(error instanceof Error ? error.message : 'Task counts could not be loaded');
+    });
+    return () => controller.abort();
+  }, [deleteTarget]);
 
   // Batch Form State
   const [phoneInputMethod, setPhoneInputMethod] = useState('Upload CSV File');
@@ -874,13 +890,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
   const deleteCampaign = async (id: string) => {
     const c = campaigns.find(item => item.id === id);
-    if (c && window.confirm(`Delete batch campaign "${c.name}"?`)) {
-      try {
-        await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
-        setCampaigns((current) => current.filter(item => item.id !== id));
-      } catch (requestError) { return showToast(requestError instanceof Error ? requestError.message : 'Campaign could not be deleted'); }
-      showToast(`Deleted batch campaign "${c.name}".`);
-    }
+    if (c && !isReadOnly) setDeleteTarget({id, name: c.name});
   };
 
   const toggleRealtimeStatus = async (id: string) => {
@@ -896,13 +906,23 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
   const deleteRealtimeCampaign = async (id: string) => {
     const c = realtimeCampaigns.find(item => item.id === id);
-    if (c && window.confirm(`Delete real-time campaign "${c.name}"?`)) {
-      try {
-        await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
-        setRealtimeCampaigns((current) => current.filter(item => item.id !== id));
-      } catch (requestError) { return showToast(requestError instanceof Error ? requestError.message : 'Campaign could not be deleted'); }
-      showToast(`Deleted real-time service "${c.name}".`);
-    }
+    if (c && !isReadOnly) setDeleteTarget({id, name: c.name});
+  };
+
+  const confirmCampaignDelete = async () => {
+    if (!deleteTarget || !deletePreview || deletingCampaign || isReadOnly) return;
+    setDeletingCampaign(true); setDeleteError('');
+    try {
+      await apiRequest(`/campaigns/${deleteTarget.id}`, { method: 'DELETE', body: JSON.stringify({
+        confirmation: 'DELETE', expectedTaskCount: deletePreview.totalTasks,
+      }) });
+      setCampaigns(current => current.filter(item => item.id !== deleteTarget.id));
+      setRealtimeCampaigns(current => current.filter(item => item.id !== deleteTarget.id));
+      showToast(`Permanently deleted "${deleteTarget.name}" and ${deletePreview.totalTasks} lead tasks.`);
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Campaign could not be deleted');
+    } finally { setDeletingCampaign(false); }
   };
 
   const handleCreateBatchCampaign = async (event?: React.SyntheticEvent) => {
@@ -969,6 +989,9 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   return (
     <div className="space-y-6">
       {/* Toast Alert */}
+      {deleteTarget && <CampaignDeleteDialog key={deleteTarget.id} name={deleteTarget.name}
+        preview={deletePreview} error={deleteError} deleting={deletingCampaign}
+        onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmCampaignDelete()} />}
       {actionMessage && (
         <div className="zea-campaign-toast fixed top-4 right-4 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-2xl border border-slate-700 z-50 animate-in slide-in-from-top-4 duration-200 flex items-center space-x-2">
           <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
