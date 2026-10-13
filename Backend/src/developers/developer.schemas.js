@@ -1,10 +1,14 @@
 import { z } from 'zod';
+import { companyTabs } from '../auth/tab-access.js';
+const tabAccessSchema = z.array(z.enum(companyTabs)).max(companyTabs.length)
+  .transform(values => [...new Set(values)]).nullable().optional();
 
 export const createDeveloperSchema = z.object({
   companyId: z.string().uuid(),
   fullName: z.string().trim().min(1).max(200),
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
   password: z.string().min(10).max(200),
+  tabAccess: tabAccessSchema,
   role: z.enum(['COMPANY_DEVELOPER', 'COMPANY_USER', 'company_developer', 'company_user'])
     .transform((value) => value.toLowerCase()).default('company_developer'),
 });
@@ -18,6 +22,7 @@ export const developerStatusSchema = z.object({
 });
 
 export const updateDeveloperSchema = z.object({
+  tabAccess: tabAccessSchema,
   companyId: z.string().uuid().optional(),
   fullName: z.string().trim().min(1).max(200).optional(),
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()).optional(),

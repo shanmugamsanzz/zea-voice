@@ -22,7 +22,7 @@ const loginBackgroundVideo =
   LOGIN_BACKGROUND_VIDEOS[Math.floor(Math.random() * LOGIN_BACKGROUND_VIDEOS.length)];
 
 export function LoginView({ onLogin, notice = '' }: { onLogin: () => void; notice?: string }) {
-  const { setRole, setUserEmail } = useAppState();
+  const { setRole, setUserEmail, setTabAccess } = useAppState();
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -38,6 +38,7 @@ export function LoginView({ onLogin, notice = '' }: { onLogin: () => void; notic
         : result.user.role === 'COMPANY_DEVELOPER' ? 'DEVELOPER' : 'USER';
       setRole(targetRole);
       setUserEmail(result.user.email);
+      setTabAccess(result.user.tabAccess ?? null);
       onLogin();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Login failed');

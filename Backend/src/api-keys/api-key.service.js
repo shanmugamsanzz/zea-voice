@@ -121,7 +121,10 @@ export async function authenticateApiKey(rawKey, metadata = {}) {
   const auth = await withAuthServiceContext(async (client) => {
     const result = await client.query(`SELECT k.*, t.status AS tenant_status, t.deleted_at AS tenant_deleted_at,
         w.status AS workspace_status, w.deleted_at AS workspace_deleted_at,
-        u.email::text, u.first_name, u.last_name
+        u.email::text, u.first_name, u.last_name,
+        (SELECT m.tab_access FROM tenant_memberships m WHERE m.user_id = k.created_by
+          AND m.tenant_id = k.tenant_id AND m.deleted_at IS NULL AND m.status = 'active'
+          ORDER BY m.created_at LIMIT 1) AS tab_access
       FROM api_keys k
       LEFT JOIN tenants t ON t.id = k.tenant_id
       LEFT JOIN workspaces w ON w.id = k.workspace_id AND w.tenant_id = k.tenant_id
@@ -140,6 +143,7 @@ export async function authenticateApiKey(rawKey, metadata = {}) {
       email: row.email ?? null, firstName: row.first_name ?? 'API', lastName: row.last_name ?? 'Key',
       role: row.tenant_id ? 'COMPANY_DEVELOPER' : 'SUPER_ADMIN',
       tenantId: row.tenant_id, workspaceId: row.workspace_id, scopes: row.scopes,
+      tabAccess: row.tab_access ?? null,
     };
   });
   if (!auth) throw new AppError(401, 'API key is invalid, expired or revoked', 'INVALID_API_KEY');

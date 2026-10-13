@@ -23,6 +23,7 @@ function mapDeveloper(row) {
     companyName: row.company_name,
     workspaceId: row.workspace_id,
     role: row.membership_role === 'company_developer' ? 'COMPANY_DEVELOPER' : 'COMPANY_USER',
+    tabAccess: row.tab_access ?? null,
     status: row.membership_status,
     lastActiveAt: row.last_login_at,
     createdAt: row.created_at,
@@ -34,7 +35,7 @@ const developerSelect = `
   SELECT count(*) OVER()::int AS full_count,
          m.id, u.id AS user_id, u.first_name, u.last_name, u.email::text, u.last_login_at,
          m.tenant_id, m.workspace_id, m.role AS membership_role, m.status AS membership_status,
-         t.name AS company_name, m.created_at, m.updated_at
+         t.name AS company_name, m.created_at, m.updated_at, m.tab_access
   FROM tenant_memberships m
   JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
   JOIN tenants t ON t.id = m.tenant_id AND t.deleted_at IS NULL
@@ -100,6 +101,8 @@ export async function createDeveloper(actorUserId, input, metadata = {}) {
       )).rows[0];
 
       const [requestId, ipAddress, userAgent] = auditValues(metadata);
+      await client.query('UPDATE tenant_memberships SET tab_access = $2::jsonb WHERE id = $1',
+        [membership.id, input.tabAccess == null ? null : JSON.stringify(input.tabAccess)]);
       await client.query(
         `INSERT INTO audit_logs
           (tenant_id, workspace_id, actor_user_id, actor_type, action, entity_type,
@@ -107,7 +110,8 @@ export async function createDeveloper(actorUserId, input, metadata = {}) {
          VALUES ($1::uuid, $2::uuid, $3::uuid, 'user', 'TENANT_USER_CREATED',
                  'tenant_membership', $4::uuid::text, $5::jsonb, $6, $7, $8)`,
         [input.companyId, company.default_workspace_id, actorUserId, membership.id,
-          JSON.stringify({ membershipId: membership.id, userId: user.id, email: input.email, role: input.role }),
+          JSON.stringify({ membershipId: membership.id, userId: user.id, email: input.email, role: input.role,
+            tabAccess: input.tabAccess ?? null }),
           requestId, ipAddress, userAgent],
       );
       return mapDeveloper(await getDeveloperRow(client, membership.id));
@@ -245,15 +249,22 @@ export function updateDeveloper(actorUserId, developerId, input, metadata = {}) 
     }
 
     const roleChanged = input.role !== undefined && input.role !== beforeRow.membership_role;
+    const accessChanged = Object.hasOwn(input, 'tabAccess')
+      && JSON.stringify(input.tabAccess == null ? null : [...input.tabAccess].sort())
+        !== JSON.stringify(beforeRow.tab_access == null ? null : [...beforeRow.tab_access].sort());
+    if (Object.hasOwn(input, 'tabAccess')) {
+      await client.query('UPDATE tenant_memberships SET tab_access = $2::jsonb WHERE id = $1',
+        [developerId, input.tabAccess === null ? null : JSON.stringify(input.tabAccess)]);
+    }
     const companyChanged = targetCompanyId !== beforeRow.tenant_id;
-    if (roleChanged || companyChanged) {
+    if (roleChanged || companyChanged || accessChanged) {
       await client.query(
         `UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'tenant_user_updated'
          WHERE membership_id = $1 AND revoked_at IS NULL`,
         [developerId],
       );
     }
-    if (companyChanged || input.role === 'company_user') {
+    if (companyChanged || input.role === 'company_user' || accessChanged) {
       await client.query(
         `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()), revoked_by = $2,
            revoke_reason = 'tenant_user_updated'

@@ -7,6 +7,7 @@
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
+import { canAccessTab, companyTabs } from '../../lib/tabAccess';
 import { startTabMeasurement } from '../../lib/performance';
 import { apiRequest } from '../../lib/api';
 import {
@@ -52,6 +53,7 @@ interface SidebarItem {
 export function DashboardLayout({ children, onLogout }: { children: React.ReactNode; onLogout: () => void | Promise<void> }) {
   const {
     role,
+    tabAccess,
     view,
     setView,
     userEmail,
@@ -132,6 +134,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
   }, [role, view, selectedCompanyId, selectedAgentId, selectedCampaignId, selectedCallId]);
 
   const handleItemClick = (viewId: string) => {
+    if (!canAccessTab(role, tabAccess, viewId)) return;
     startTabMeasurement(viewId);
     setView(viewId);
     setMobileMenuOpen(false);
@@ -198,6 +201,16 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       ],
     }
   ];
+
+  const visibleCategories = zeaCategories.map(category => ({ ...category,
+    items: category.items.filter(item => canAccessTab(role, tabAccess, item.viewId)),
+  })).filter(category => category.items.length > 0);
+  const viewAllowed = canAccessTab(role, tabAccess, view);
+  useEffect(() => {
+    if (role === 'SUPER_ADMIN' || viewAllowed) return;
+    const next = companyTabs.find(([id]) => canAccessTab(role, tabAccess, id));
+    if (next) setView(next[0]);
+  }, [role, tabAccess, view, viewAllowed]);
 
   const getViewName = (viewId: string) => {
     switch (viewId) {
@@ -376,7 +389,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
 
             {/* Navigation categorized list */}
             <nav className={`min-h-0 flex-1 overflow-y-auto py-6 space-y-5 ${isSidebarMinimized ? 'px-2' : 'px-4'}`}>
-              {zeaCategories.map((category) => (
+              {visibleCategories.map((category) => (
                 <div key={category.title} className="space-y-0.5">
                   {!isSidebarMinimized && (
                     <div className="text-xs font-black text-slate-400 dark:text-slate-500 tracking-wider px-3 mb-2 block uppercase">
@@ -460,7 +473,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                     })}
                   </div>
                 ) : (
-                  zeaCategories.map((category) => (
+                  visibleCategories.map((category) => (
                     <div key={category.title} className="space-y-0.5">
                       <div className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 mb-2 block">
                         {category.title}
@@ -588,7 +601,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                 ? 'No call credits are available. New inbound and outbound calls are blocked. Contact Super Admin to add credits.'
                 : `Only ${creditNotice.availableBalance} credits remain. Outbound calls are paused at the ${creditNotice.globalLowCreditThreshold}-credit threshold. Contact Super Admin to add credits.`}
             </div>}
-            {children}
+            {viewAllowed ? children : <div className="rounded-xl bg-white p-6 text-sm text-slate-600">No sections are enabled for your account. Contact Super Admin for access.</div>}
           </div>
         </main>
       </div>

@@ -8,6 +8,8 @@ import { UserRole } from '../types';
 
 interface AppState {
   role: UserRole;
+  tabAccess: string[] | null;
+  setTabAccess: (value: string[] | null) => void;
   view: string;
   selectedCompanyId: string | null;
   selectedAgentId: string | null;
@@ -29,6 +31,7 @@ interface AppState {
 const AppStateContext = createContext<AppState | undefined>(undefined);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const [tabAccess, setTabAccess] = useState<string[] | null>(null);
   const [role, setRoleState] = useState<UserRole>('DEVELOPER'); // Default to DEVELOPER
   const stored = (key: string) => typeof window === 'undefined' ? null : sessionStorage.getItem(key);
   const [view, setViewState] = useState<string>(() => stored('zea_voice_view') || 'dashboard');
@@ -99,6 +102,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   return (
     <AppStateContext.Provider value={{
       role,
+      tabAccess,
+      setTabAccess,
       view,
       selectedCompanyId,
       selectedAgentId,

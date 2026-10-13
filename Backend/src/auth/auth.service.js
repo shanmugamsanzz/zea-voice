@@ -22,6 +22,7 @@ function publicUser(user, membership) {
     role: roleFor(user, membership),
     tenantId: membership?.tenant_id ?? null,
     workspaceId: membership?.workspace_id ?? null,
+    tabAccess: membership?.tab_access ?? null,
   };
 }
 
@@ -45,7 +46,7 @@ async function selectMembership(client, user, tenantId) {
   if (user.platform_role === 'super_admin') return { membership: null };
 
   const memberships = await client.query(
-    `SELECT m.id, m.tenant_id, m.workspace_id, m.role, m.status,
+    `SELECT m.id, m.tenant_id, m.workspace_id, m.role, m.status, m.tab_access,
             t.name AS tenant_name, w.name AS workspace_name
      FROM tenant_memberships m
      JOIN tenants t ON t.id = m.tenant_id
@@ -217,7 +218,7 @@ export async function authenticateAccessToken(accessToken) {
       `SELECT s.id AS session_id, s.user_id, s.membership_id, s.tenant_id,
               s.workspace_id, s.access_expires_at, s.refresh_expires_at,
               u.email::text, u.first_name, u.last_name, u.status AS user_status,
-              u.platform_role, m.role AS membership_role, m.status AS membership_status
+              u.platform_role, m.role AS membership_role, m.status AS membership_status, m.tab_access
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
        CROSS JOIN platform_settings ps
@@ -250,6 +251,7 @@ export async function authenticateAccessToken(accessToken) {
           : 'COMPANY_USER',
       tenantId: row.tenant_id,
       workspaceId: row.workspace_id,
+      tabAccess: row.tab_access ?? null,
     };
   });
 
@@ -263,7 +265,7 @@ export async function refreshSession(refreshToken, { ipAddress, userAgent }) {
     const result = await client.query(
       `SELECT s.*, u.status AS user_status, u.platform_role,
               u.email::text, u.first_name, u.last_name,
-              m.role AS membership_role, m.status AS membership_status
+              m.role AS membership_role, m.status AS membership_status, m.tab_access
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
        CROSS JOIN platform_settings ps
@@ -315,6 +317,7 @@ export async function refreshSession(refreshToken, { ipAddress, userAgent }) {
             : 'COMPANY_USER',
         tenantId: session.tenant_id,
         workspaceId: session.workspace_id,
+        tabAccess: session.tab_access ?? null,
       },
     };
   });

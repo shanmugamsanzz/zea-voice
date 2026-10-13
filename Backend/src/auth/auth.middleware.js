@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { assertRequestTabAccess } from './tab-access.js';
 import { authenticateAccessToken } from './auth.service.js';
 import { authenticateApiKey, isApiKeyToken } from '../api-keys/api-key.service.js';
 import { isPlatformAdminIpAllowed } from '../settings/platform-setting.service.js';
@@ -55,6 +56,7 @@ export async function authenticateRequest(request, _response, next) {
       && !await isPlatformAdminIpAllowed(request.ip ?? '127.0.0.1')) {
       throw new AppError(403, 'Administrative access is not allowed from this IP address', 'ADMIN_IP_NOT_ALLOWED');
     }
+    assertRequestTabAccess(request);
     next();
   } catch (error) {
     next(error);

@@ -24,7 +24,7 @@ function CoreApp() {
   useResizableTables();
   useKpiCardDecorations();
   useSurfaceDecorations();
-  const { role, setRole, setUserEmail, resetNavigation } = useAppState();
+  const { role, setRole, setUserEmail, setTabAccess, resetNavigation } = useAppState();
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
   const [authNotice, setAuthNotice] = useState('');
 
@@ -40,11 +40,12 @@ function CoreApp() {
       setAuthState('anonymous');
     };
     window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
-    apiRequest<{ user: { email?: string; role: string } }>('/auth/me', { zeaCache: 'bypass' })
+    apiRequest<{ user: { email?: string; role: string; tabAccess?: string[] | null } }>('/auth/me', { zeaCache: 'bypass' })
       .then(({ user }) => {
         if (!active) return;
         setRole(user.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : user.role === 'COMPANY_DEVELOPER' ? 'DEVELOPER' : 'USER');
         setUserEmail(user.email ?? '');
+        setTabAccess(user.tabAccess ?? null);
         setAuthState('authenticated');
       })
       .catch(() => {

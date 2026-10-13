@@ -142,7 +142,7 @@ export function getCall(auth, callId, dependencies = {}) {
     const call = result.rows[0];
     return {
       ...mapCall({ ...call, transcript: transcript.rows }, true, includeDeveloperMetadata),
-      costReport: await getCallCostReport(client, call),
+      costReport: includeDeveloperMetadata ? await getCallCostReport(client, call) : null,
     };
   });
 }
