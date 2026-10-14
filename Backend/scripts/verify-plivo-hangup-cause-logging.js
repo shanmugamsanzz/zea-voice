@@ -6,6 +6,18 @@ assert.equal(plivoHangupOutcome({
   HangupSource: 'Callee', HangupCauseName: 'Normal Hangup',
   HangupCauseCode: '4000', CallStatus: 'completed', Event: 'Hangup', BillDuration: '30',
 }), 'completed');
+// Replay the provider endings of the appointment and wrong-number calls.
+for (const duration of ['120', '30']) {
+  assert.equal(plivoHangupOutcome({
+    HangupSource: 'Plivo', HangupCauseName: 'End Of XML Instructions',
+    HangupCauseCode: '4010', CallStatus: 'completed', Event: 'Hangup', BillDuration: duration,
+  }), 'completed');
+}
+for (const status of ['failed', 'busy', 'no-answer', undefined]) {
+  assert.equal(plivoHangupOutcome({
+    HangupCauseName: 'End Of XML Instructions', CallStatus: status,
+  }), 'failed', 'XML ending alone must not establish a completed call');
+}
 for (const [cause, expected] of [
   ['Normal Hangup', 'completed'], ['Normal Clearing', 'completed'],
   ['User Busy', 'busy'], ['No Answer', 'no_answer'], ['Call Rejected', 'rejected'],

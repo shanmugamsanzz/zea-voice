@@ -83,6 +83,9 @@ export function plivoHangupOutcome(payload) {
   if (value.includes('unavailable') || value.includes('unreachable')) return 'unavailable';
   if (value.includes('cancel')) return 'canceled';
   if (value === 'normal_hangup') return 'completed';
+  // A completed call also ends normally when Plivo finishes the response XML.
+  if (value === 'end_of_xml_instructions'
+    && String(payload.CallStatus ?? '').trim().toLowerCase() === 'completed') return 'completed';
   if (value.includes('complete') || value.includes('normal_clearing')) return 'completed';
   return 'failed';
 }
