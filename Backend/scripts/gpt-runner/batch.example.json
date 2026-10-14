@@ -1,0 +1,7 @@
+{
+  "configs": [
+    "./config.example.json",
+    "./config.example.json"
+  ],
+  "concurrency": 1
+}

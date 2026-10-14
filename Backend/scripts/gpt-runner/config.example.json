@@ -1,0 +1,9 @@
+{
+  "agentTestLink": "https://example.invalid/test/REPLACE_WITH_AGENT_TEST_SHARE_TOKEN",
+  "apiBaseUrl": "https://example.invalid/api",
+  "language": "ta-IN",
+  "scenario": "./scenarios/tamil-smoke.json",
+  "maxTurns": 5,
+  "maxDurationSeconds": 120,
+  "outputDirectory": "./outputs"
+}

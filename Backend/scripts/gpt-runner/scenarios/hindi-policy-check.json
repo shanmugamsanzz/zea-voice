@@ -1,0 +1,10 @@
+{
+  "id": "hindi-language-policy",
+  "language": "hi-IN",
+  "openingQuestion": "नमस्ते, आप कौन सी सेवाएँ प्रदान करते हैं?",
+  "goals": [
+    "Check the target's configured supported-language policy.",
+    "If Hindi is unsupported, observe the stated limitation rather than treating it as an automatic defect.",
+    "Do not request appointments, callbacks or other tool actions."
+  ]
+}

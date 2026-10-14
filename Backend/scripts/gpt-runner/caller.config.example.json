@@ -1,0 +1,16 @@
+{
+  "llm": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://example.invalid/v1",
+    "model": "REPLACE_WITH_APPROVED_MODEL",
+    "apiKeyEnv": "GPT_RUNNER_LLM_API_KEY"
+  },
+  "tts": {
+    "provider": "cartesia",
+    "baseUrl": "https://example.invalid",
+    "model": "REPLACE_WITH_APPROVED_MODEL",
+    "voice": "REPLACE_WITH_APPROVED_VOICE",
+    "language": "ta-IN",
+    "apiKeyEnv": "GPT_RUNNER_TTS_API_KEY"
+  }
+}

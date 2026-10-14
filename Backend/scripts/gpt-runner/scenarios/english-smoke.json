@@ -1,0 +1,10 @@
+{
+  "id": "english-information-smoke",
+  "language": "en-IN",
+  "openingQuestion": "Hello, which rehabilitation services do you offer?",
+  "goals": [
+    "Ask an information-only question.",
+    "Follow up on the actual answer without authorizing a tool action.",
+    "Check whether the answer admits unavailable facts."
+  ]
+}

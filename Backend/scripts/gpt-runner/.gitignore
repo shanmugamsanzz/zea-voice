@@ -1,0 +1,11 @@
+# Local caller configuration and generated evidence must not be committed.
+*.local.json
+config.json
+outputs/
+recordings/
+*.wav
+*.pcm
+*.mulaw
+.env
+.env.*
+!.env.example

@@ -1,0 +1,10 @@
+{
+  "id": "tamil-information-smoke",
+  "language": "ta-IN",
+  "openingQuestion": "வணக்கம், உங்க மருத்துவமனையில் என்னென்ன சேவைகள் இருக்கு?",
+  "goals": [
+    "Ask a factual service question using approved knowledge.",
+    "Ask a context-dependent follow-up without requesting a booking or callback.",
+    "Observe an unavailable factual answer without inventing expected facts."
+  ]
+}
