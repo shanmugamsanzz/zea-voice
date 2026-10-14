@@ -74,7 +74,7 @@ async function attemptAccount(attemptId) {
   });
 }
 
-function outcome(payload) {
+export function plivoHangupOutcome(payload) {
   const value = String(payload.HangupCauseName ?? payload.CallStatus ?? payload.Event ?? '')
     .toLowerCase().replace(/[ -]+/g, '_');
   if (value.includes('busy')) return 'busy';
@@ -82,6 +82,7 @@ function outcome(payload) {
   if (value.includes('reject') || value.includes('decline')) return 'rejected';
   if (value.includes('unavailable') || value.includes('unreachable')) return 'unavailable';
   if (value.includes('cancel')) return 'canceled';
+  if (value === 'normal_hangup') return 'completed';
   if (value.includes('complete') || value.includes('normal_clearing')) return 'completed';
   return 'failed';
 }
@@ -158,7 +159,7 @@ export async function processPlivoCallback(input) {
       await markAttemptRinging(input.attemptId, providerCallId, input.payload);
       return { duplicate: false, status: 'ringing' };
     }
-    const finalOutcome = outcome(input.payload);
+    const finalOutcome = plivoHangupOutcome(input.payload);
     const result = await finishAttempt(input.attemptId, finalOutcome, {
       durationSeconds: Number(input.payload.BillDuration ?? input.payload.Duration ?? 0),
       payload: input.payload,
@@ -217,7 +218,7 @@ export async function processInboundPlivoHangup(input) {
       return { duplicate: true, callId: call.id, tenantId: call.tenant_id };
     }
 
-    const finalOutcome = outcome(input.payload);
+    const finalOutcome = plivoHangupOutcome(input.payload);
     const status = ['completed', 'failed', 'busy', 'no_answer', 'canceled'].includes(finalOutcome)
       ? finalOutcome : 'failed';
     const duration = Math.max(0, Number(input.payload.BillDuration ?? input.payload.Duration ?? 0));

@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { describePlivoHangupCause } from '../src/telephony/plivo-webhook.service.js';
+import { describePlivoHangupCause, plivoHangupOutcome } from '../src/telephony/plivo-webhook.service.js';
+
+assert.equal(plivoHangupOutcome({
+  HangupSource: 'Callee', HangupCauseName: 'Normal Hangup',
+  HangupCauseCode: '4000', CallStatus: 'completed', Event: 'Hangup', BillDuration: '30',
+}), 'completed');
+for (const [cause, expected] of [
+  ['Normal Hangup', 'completed'], ['Normal Clearing', 'completed'],
+  ['User Busy', 'busy'], ['No Answer', 'no_answer'], ['Call Rejected', 'rejected'],
+  ['Destination Unavailable', 'unavailable'], ['Canceled', 'canceled'],
+  ['Network Failure', 'failed'], ['Abnormal Hangup', 'failed'], ['Unknown', 'failed'],
+]) {
+  assert.equal(plivoHangupOutcome({ HangupCauseName: cause, CallStatus: 'completed' }), expected, cause);
+}
+assert.equal(plivoHangupOutcome({ CallStatus: 'completed' }), 'completed');
+assert.equal(plivoHangupOutcome({ CallStatus: 'failed' }), 'failed');
+assert.equal(plivoHangupOutcome({}), 'failed');
 
 assert.deepEqual(describePlivoHangupCause({
   HangupSource: 'Caller',
