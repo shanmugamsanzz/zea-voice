@@ -1,3 +1,4 @@
+import { traceLlmRequest } from './request-trace.js';
 import { env } from '../../../config/env.js';
 import { AppError } from '../../../middleware/errors.js';
 import { normalizeLlmEvent, normalizeLlmUsage } from './llm.interface.js';
@@ -59,11 +60,16 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
     let finishReason = null;
     let providerRequestId = null;
     const toolCalls = [];
+    let trace = null;
+    let traceStatus = 'interrupted';
+    let traceErrorCode = null;
     try {
+      const body = JSON.stringify(requestBody(input));
+      trace = traceLlmRequest({ body, input, providerConfig, runtimeContext });
       const response = await (runtimeContext.fetchImpl ?? fetch)(resolved.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': resolved.apiKey },
-        body: JSON.stringify(requestBody(input)),
+        body,
         signal: request.controller.signal,
       });
       await requireStreamingResponse(response, providerConfig);
@@ -71,6 +77,7 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
       yield normalizeLlmEvent({ type: 'response_started', providerRequestId }, context);
       for await (const data of parseSse(response.body)) {
         const payload = parseJson(data);
+        trace?.record(payload);
         providerRequestId ??= payload.responseId ?? null;
         if (payload.error) throw Object.assign(new Error(payload.error.message), { code: payload.error.code });
         for (const candidate of payload.candidates ?? []) {
@@ -103,6 +110,7 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
           yield normalizeLlmEvent({ type: 'usage', usage, providerRequestId }, context);
         }
       }
+      traceStatus = 'completed';
       state.breaker.success();
       yield normalizeLlmEvent({
         type: 'completed', finishReason: finishReason ?? 'STOP', usage, toolCalls, providerRequestId,
@@ -110,6 +118,8 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
       }, context);
     } catch (error) {
       const failure = providerFailure(error, request, providerConfig);
+      traceStatus = failure ? 'failed' : 'cancelled';
+      traceErrorCode = failure?.code ?? null;
       if (!failure) {
         yield normalizeLlmEvent({ type: 'cancelled', reason: 'barge-in', providerRequestId }, context);
         return;
@@ -117,7 +127,10 @@ export function createGeminiLlmAdapter({ providerConfig, runtimeContext = {} }) 
       if (failure.details?.status >= 500 || !failure.details?.status) state.breaker.failure();
       yield errorEvent(failure, providerConfig);
       throw failure;
-    } finally { request.finish(); }
+    } finally {
+      trace?.finish(traceStatus, { providerRequestId, finishReason, errorCode: traceErrorCode });
+      request.finish();
+    }
   }
   return {
     configuration: { ...resolved, apiKey: undefined, providerId: providerConfig.providerId, modelId: providerConfig.modelId },

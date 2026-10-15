@@ -1,3 +1,4 @@
+import { traceLlmRequest } from './request-trace.js';
 import { env } from '../../../config/env.js';
 import { AppError } from '../../../middleware/errors.js';
 import { normalizeLlmEvent, normalizeLlmUsage } from './llm.interface.js';
@@ -54,14 +55,19 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
     let usage = normalizeLlmUsage();
     const blocks = new Map();
     const completedTools = [];
+    let trace = null;
+    let traceStatus = 'interrupted';
+    let traceErrorCode = null;
     try {
+      const body = JSON.stringify(requestBody(input, resolved.model));
+      trace = traceLlmRequest({ body, input, providerConfig, runtimeContext });
       const response = await (runtimeContext.fetchImpl ?? fetch)(resolved.url, {
         method: 'POST',
         headers: {
           'content-type': 'application/json', 'x-api-key': resolved.apiKey,
           'anthropic-version': resolved.version,
         },
-        body: JSON.stringify(requestBody(input, resolved.model)),
+        body,
         signal: request.controller.signal,
       });
       await requireStreamingResponse(response, providerConfig);
@@ -69,6 +75,7 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
       yield normalizeLlmEvent({ type: 'response_started', providerRequestId }, context);
       for await (const data of parseSse(response.body)) {
         const payload = parseJson(data);
+        trace?.record(payload);
         if (payload.type === 'error') throw Object.assign(new Error(payload.error?.message), { code: payload.error?.type });
         if (payload.type === 'message_start') {
           providerRequestId ??= payload.message?.id ?? null;
@@ -112,6 +119,7 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
           yield normalizeLlmEvent({ type: 'usage', usage, providerRequestId }, context);
         }
       }
+      traceStatus = 'completed';
       state.breaker.success();
       yield normalizeLlmEvent({
         type: 'completed', finishReason: finishReason ?? 'end_turn', usage,
@@ -120,6 +128,8 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
       }, context);
     } catch (error) {
       const failure = providerFailure(error, request, providerConfig);
+      traceStatus = failure ? 'failed' : 'cancelled';
+      traceErrorCode = failure?.code ?? null;
       if (!failure) {
         yield normalizeLlmEvent({ type: 'cancelled', reason: 'barge-in', providerRequestId }, context);
         return;
@@ -127,7 +137,10 @@ export function createAnthropicLlmAdapter({ providerConfig, runtimeContext = {} 
       if (failure.details?.status >= 500 || !failure.details?.status) state.breaker.failure();
       yield errorEvent(failure, providerConfig);
       throw failure;
-    } finally { request.finish(); }
+    } finally {
+      trace?.finish(traceStatus, { providerRequestId, finishReason, errorCode: traceErrorCode });
+      request.finish();
+    }
   }
   return {
     configuration: { ...resolved, apiKey: undefined, providerId: providerConfig.providerId, modelId: providerConfig.modelId },

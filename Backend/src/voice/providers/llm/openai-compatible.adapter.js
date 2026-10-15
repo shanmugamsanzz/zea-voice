@@ -1,3 +1,4 @@
+import { traceLlmRequest } from './request-trace.js';
 import { env } from '../../../config/env.js';
 import { resolveLlmConfiguration } from '../../../llm/llm.client.js';
 import { normalizeLlmEvent, normalizeLlmUsage } from './llm.interface.js';
@@ -53,16 +54,11 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
     let finishReason = null;
     let providerRequestId = null;
     const toolCalls = new Map();
+    let trace = null;
+    let traceStatus = 'interrupted';
+    let traceErrorCode = null;
     try {
-      const response = await (runtimeContext.fetchImpl ?? fetch)(configuration.url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(configuration.azure
-            ? { 'api-key': configuration.apiKey }
-            : { authorization: `Bearer ${configuration.apiKey}` }),
-        },
-        body: JSON.stringify({
+      const body = JSON.stringify({
           model: configuration.model,
           messages: input.messages,
           temperature: input.temperature,
@@ -81,7 +77,17 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
           } : input.responseFormat?.type === 'json_object'
             ? { response_format: { type: 'json_object' } } : {}),
           ...(input.tools?.length ? { tools: tools(input.tools), tool_choice: 'auto' } : {}),
-        }),
+        });
+      trace = traceLlmRequest({ body, input, providerConfig, runtimeContext });
+      const response = await (runtimeContext.fetchImpl ?? fetch)(configuration.url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(configuration.azure
+            ? { 'api-key': configuration.apiKey }
+            : { authorization: `Bearer ${configuration.apiKey}` }),
+        },
+        body,
         signal: request.controller.signal,
       });
       await requireStreamingResponse(response, providerConfig);
@@ -90,6 +96,7 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
       for await (const data of parseSse(response.body)) {
         if (data === '[DONE]') break;
         const payload = parseJson(data);
+        trace?.record(payload);
         providerRequestId ??= payload.id ?? null;
         if (payload.error) throw Object.assign(new Error(payload.error.message ?? 'LLM stream failed'), { code: payload.error.code });
         if (payload.usage) {
@@ -135,6 +142,7 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
         completedTools.push({ id: normalized.id, name: normalized.name, arguments: normalized.arguments });
         yield normalized;
       }
+      traceStatus = 'completed';
       state.breaker.success();
       yield normalizeLlmEvent({
         type: 'completed', finishReason: finishReason ?? 'stop', usage,
@@ -143,6 +151,8 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
       }, context);
     } catch (error) {
       const failure = providerFailure(error, request, providerConfig);
+      traceStatus = failure ? 'failed' : 'cancelled';
+      traceErrorCode = failure?.code ?? null;
       if (!failure) {
         yield normalizeLlmEvent({ type: 'cancelled', reason: 'barge-in', providerRequestId }, context);
         return;
@@ -153,6 +163,7 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
       yield errorEvent(failure, providerConfig);
       throw failure;
     } finally {
+      trace?.finish(traceStatus, { providerRequestId, finishReason, errorCode: traceErrorCode });
       request.finish();
     }
   }

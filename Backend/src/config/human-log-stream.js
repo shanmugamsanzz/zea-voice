@@ -45,7 +45,9 @@ export function createHumanLogStream(output = process.stdout) {
   return {
     write(line) {
       try {
-        output.write(`${format(JSON.parse(line))}\n`);
+        const event = JSON.parse(line);
+        output.write(['llm.request_trace', 'llm.response_trace', 'voice.turn_trace', 'voice.playback_trace'].includes(event.stage)
+          ? `${JSON.stringify(event)}\n` : `${format(event)}\n`);
       } catch {
         output.write(`${oneLine(line)}\n`);
       }

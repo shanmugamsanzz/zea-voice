@@ -154,6 +154,8 @@ export class AudioPacer {
       ));
       this.onPlaybackMetric({
         type: 'websocket_delivery',
+        generationId: frame.generationId,
+        firstGenerationId: frame.firstGenerationId ?? frame.generationId,
         deliveryMs,
         bufferedAmount,
         slow: deliveryMs >= this.websocketWarnMs,

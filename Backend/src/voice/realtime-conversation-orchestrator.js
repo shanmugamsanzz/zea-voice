@@ -1,3 +1,4 @@
+import { traceSelectedCallEvent } from './providers/llm/request-trace.js';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
@@ -106,6 +107,7 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
       temperature: request.temperature ?? 0,
       maxOutputTokens: Number(request.maxOutputTokens) || 4_096,
       responseFormat: request.responseFormat,
+      traceContext: options.traceContext,
     });
     options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
     const iterator = stream[Symbol.asyncIterator]();
@@ -721,6 +723,7 @@ export class RealtimeConversationOrchestrator {
     const runtimeContext = {
       callId: this.call.id,
       fetch: this.dependencies.fetchImpl,
+      llmTraceContext: () => ({ turnEpoch: this.epoch }),
       fetchImpl: this.dependencies.fetchImpl,
       webSocketFactory: this.dependencies.webSocketFactory,
       breaker: this.llmCircuitBreaker,
@@ -742,6 +745,16 @@ export class RealtimeConversationOrchestrator {
         err: error, stage: 'ambience.mixer_disabled', callId: this.call.id,
       }, 'Ambience mixer failed; speech playback will continue without background sound'),
       onPlaybackMetric: (metric) => {
+        if (metric.type === 'websocket_delivery' && metric.generationId) {
+          const match = /^turn-(\d+)-/.exec(metric.generationId ?? '');
+          this.#traceTurn(match ? Number(match[1]) : this.epoch, 'transport_packet_sent', {
+            generationId: metric.generationId ?? null,
+            firstGenerationId: metric.firstGenerationId ?? null,
+            playbackGroupId: metric.playbackGroupId,
+            durationMs: metric.packetDurationMs, bytes: metric.packetBytes,
+            evidence: 'websocket_send_completed_not_remote_playback_ack',
+          }, 'voice.playback_trace');
+        }
         const continuity = this.runtimeMetrics.audioContinuity;
         const gapMs = Math.max(0, Number(metric.gapMs ?? 0));
         const hasBufferedAudio = Number.isFinite(Number(metric.bufferedAudioMs));
@@ -1000,6 +1013,9 @@ export class RealtimeConversationOrchestrator {
 
   async #guard(stage, operation) {
     try { await operation(); } catch (error) {
+      this.#traceTurn(this.epoch, 'runtime_recovery_entered', {
+        operation: stage, errorCode: error?.code ?? null,
+      });
       try { await this.#recover(error, stage); } catch (recoveryError) {
         this.log.error({ err: recoveryError, callId: this.call.id, stage }, 'Voice pipeline recovery failed');
         if (!this.mediaSession.closed) this.mediaSession.close(1011, 'voice recovery failed');
@@ -1455,6 +1471,16 @@ export class RealtimeConversationOrchestrator {
     return false;
   }
 
+  #traceTurn(epoch, event, data = {}, stage = 'voice.turn_trace') {
+    try {
+      traceSelectedCallEvent({ stage, data: { event, ...data },
+        input: { traceContext: { turnEpoch: epoch } },
+        providerConfig: this.runtimeProfile?.providers?.llm ?? {},
+        runtimeContext: { callId: this.call.id },
+      });
+    } catch { /* Diagnostics never affect calls. */ }
+  }
+
   #isStaleGeneration(epoch) {
     return this.finalized
       || (Number.isInteger(epoch) && (epoch !== this.epoch || this.cancelledEpochs.has(epoch)));
@@ -1800,6 +1826,8 @@ export class RealtimeConversationOrchestrator {
       // Progress speech is a separate audible event from the eventual answer.
       // Keeping it in a distinct playback group prevents the intentional
       // processing interval from being reported as an audio underrun.
+      this.#traceTurn(epoch, 'sentence_queued', { generationId, speech: sentence,
+        sentenceNumber: currentSentenceNumber, acknowledgement }, 'voice.playback_trace');
       const generationPlaybackGroupId = acknowledgement
         ? `${playbackGroupId}:acknowledgement:${acknowledgementNumber}`
         : playbackGroupId;
@@ -1942,6 +1970,10 @@ export class RealtimeConversationOrchestrator {
         if (played && !acknowledgement) completedSentences.push(played?.spokenText ?? sentence);
         return played;
       }).catch((error) => {
+        this.#traceTurn(epoch, 'sentence_failed', {
+          generationId, speech: sentence, acknowledgement,
+          errorCode: error?.code ?? null,
+        }, 'voice.playback_trace');
         if (acknowledgement) {
           this.log.warn({ err: error, stage: 'tts.acknowledgement_failure_ignored',
             callId: this.call.id, generationId },
@@ -2012,6 +2044,10 @@ export class RealtimeConversationOrchestrator {
       epoch,
       persistAudible: async (reason) => {
         const audibleText = audibleSentences.join(' ').trim();
+        this.#traceTurn(epoch, 'playback_interrupted', { reason,
+          queuedSpeech: spokenSentences, synthesisCompletedSpeech: completedSentences,
+          audioStartedSpeech: audibleSentences,
+          evidence: 'audio_started_is_not_proof_full_sentence_heard' }, 'voice.playback_trace');
         this.liveCallMemory?.reconcileInterruptedAssistantResponse?.(
           audibleText,
           memoryBeforeValidatedResponse,
@@ -2063,6 +2099,9 @@ export class RealtimeConversationOrchestrator {
           if (epoch === this.epoch && !this.finalized) {
             await this.audioEngine.flushOutputGroup?.(playbackGroupId);
             await this.audioEngine.drainOutput();
+            this.#traceTurn(epoch, 'playback_drained', { synthesisCompletedSpeech: completedSentences,
+              evidence: 'local_output_queue_drained_not_remote_playback_ack',
+            }, 'voice.playback_trace');
           }
           const firstFailure = sentenceFailures[0]?.error ?? null;
           // An acknowledgement is temporary progress audio, not the final
@@ -2118,6 +2157,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #runConfiguredCallCheckTurn(response, epoch) {
+    this.#traceTurn(epoch, 'configured_quick_reply', { speech: response, llmBypassed: true });
     this.#clearInactivity();
     const turnStartedAt = Date.now();
     const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
@@ -2132,6 +2172,7 @@ export class RealtimeConversationOrchestrator {
         return Object.freeze({ playbackCompleted: false, suppressInactivity: true });
       }
       const spoken = playback.spokenText || response;
+      this.#traceTurn(epoch, 'final_transcript', { speech: spoken, llmBypassed: true });
       await this.controller.setAssistantResponse(spoken, Date.now(), { sources: [] });
       sentencePipeline.markTranscriptCommitted();
       await this.controller.playbackComplete();
@@ -2221,6 +2262,7 @@ export class RealtimeConversationOrchestrator {
       publications: [],
     };
     const invokeStructuredLlm = createTemplateEngineStructuredInvoker(this.adapters.llm, {
+      traceContext: { turnEpoch: epoch },
       onActive: (session) => { this.activeLlm = session; },
       onUsage: (event) => {
         if (event.usage) this.usageTracker.record('llm', event.usage);
@@ -2334,6 +2376,7 @@ export class RealtimeConversationOrchestrator {
               },
             },
           );
+          this.#traceTurn(epoch, 'tool_result', { toolName: toolCall.name, results });
           const verified = results[0];
           if (toolCall.name==='update_contact' && verified.toolId===updateContactTool.id
             && verified.success && verified.output?.saved===true) {
@@ -2493,6 +2536,9 @@ export class RealtimeConversationOrchestrator {
     });
     const finalAnswer = streamedSpeechPreservedAfterFailure
       ? '' : this.#fitTtsMessage(result.speech, { preserveGeneratedSpeech: true });
+    this.#traceTurn(epoch, 'final_speech', { speech: finalAnswer,
+      recoveryKind: result.recoveryKind ?? null, operationalFailure: result.operationalFailure ?? null,
+      unexpectedFailure: result.unexpectedFailure ?? null, callControl: result.callControl ?? null });
     if ((!streamedSpeechPreservedAfterFailure && !finalAnswer)
       || (!streamedSpeechPreservedAfterFailure
         && streamedFinalSentenceCount === 0 && !sentencePipeline.enqueue(finalAnswer))) {
@@ -2533,6 +2579,7 @@ export class RealtimeConversationOrchestrator {
       finalResponseReadyAt,
       finalResponseQueuedAt,
     });
+    this.#traceTurn(epoch, 'final_transcript', { speech: answer, partial: playback.partial });
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
@@ -2590,6 +2637,7 @@ export class RealtimeConversationOrchestrator {
 
 
   async #synthesizeWelcome(text, generationId) {
+    this.#traceTurn(this.epoch, 'welcome_speech', { speech: text, generationId, llmBypassed: true });
     const cached = await this.cachedWelcomePromise;
     if (cached?.length) {
       if (!await this.#reserveTtsCharacters(text, generationId)) return false;
@@ -2722,6 +2770,9 @@ export class RealtimeConversationOrchestrator {
     let generationRecorded = false;
     try {
       const ttsAdapter = options.ttsAdapter ?? this.adapters.tts;
+      this.#traceTurn(options.epoch ?? this.epoch, 'tts_text_submitted', {
+        speech: text, generationId, attempt: options.attempt ?? 0,
+      }, 'voice.playback_trace');
       const stream = ttsAdapter.synthesizeStream({ text, generationId });
       const iterator = stream[Symbol.asyncIterator]();
       while (true) {
@@ -2966,6 +3017,9 @@ export class RealtimeConversationOrchestrator {
       }
     }
     if (!recovery?.audio?.length || this.#isStaleGeneration(options.epoch)) return null;
+    this.#traceTurn(options.epoch ?? this.epoch, 'cached_technical_fallback', {
+      speech: recovery.text, generationId,
+    });
     const recoveryGenerationId = `${generationId}-technical-recovery`;
     this.audioEngine.beginOutputGeneration(
       recoveryGenerationId, options.playbackGroupId ?? recoveryGenerationId,
@@ -2985,6 +3039,9 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #prefetchTtsAttempt(text, generationId, options = {}) {
+    this.#traceTurn(options.epoch ?? this.epoch, 'tts_text_submitted', {
+      speech: text, generationId, attempt: options.attempt ?? 0, lookahead: true,
+    }, 'voice.playback_trace');
     const requestStartedAt = Date.now();
     this.runtimeMetrics.ttsGeneration.requests += 1;
     let adapter = null;
