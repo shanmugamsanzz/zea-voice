@@ -333,6 +333,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     speech: toolResponse?.speech ?? universalTurn.speech,
     state: workflowResult.state,
     evidence: universalTurn.evidence,
+    liveData: universalTurn.liveData,
     evidenceIds: universalTurn.evidenceIds,
     diagnostics: Object.freeze({
       retrieval: universalTurn.retrievalDiagnostics,

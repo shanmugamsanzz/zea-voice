@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 const scripts = [
   'verify-agent-call-transfer-settings.js', 'verify-native-call-transfer.js',
+  'verify-plivo-playback-ack.js',
   'verify-transfer-follow-up.js', 'verify-transfer-runtime-resume.js', 'verify-transfer-media-ownership.js', 'verify-transfer-audio.js',
   'verify-agent-webhook-tools.js', 'verify-template-engine-production-runtime.js',
   'verify-tool-result-call-control.js', 'verify-follow-up-scheduling.js',

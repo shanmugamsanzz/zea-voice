@@ -48,7 +48,7 @@ Prompt instructions for the pilot (adapt wording to the agent language):
 
 From Backend run `npm run verify:call-transfer` and `npm run check`.
 From Frontend run `npm run lint` and `npm run build`.
-The release suite runs 13 transfer/audio/call/tool/callback/browser/capacity checks.
+The release suite runs 14 transfer/audio/call/tool/callback/browser/capacity checks.
 Tests use mocked provider/database operations and a real local WebSocket where
 applicable; passing these is not proof of a live phone bridge or production RLS.
 

@@ -58,7 +58,11 @@ The prompt's workflow speech is played as the pre-transfer announcement using th
 agent's selected voice. If absent, the runtime generates a short announcement
 using that prompt/language. It drains the audio frames, stops background pacing,
 then sends a unique Plivo checkpoint. Staff dialing begins only after the matching
-`playedStream` acknowledgement. A missing/cleared/interrupted acknowledgement
+`playedStream` acknowledgement (including Plivo's legacy `played` format).
+Acknowledgements must match the active stream and a pending checkpoint; they
+are not filtered by the inbound audio sequence high-water mark. Duplicate or
+unrequested checkpoint replies are ignored. Clearing audio invalidates pending
+checkpoints. A missing/cleared/interrupted acknowledgement
 fails safely without dialing staff and resumes assistance where media remains
 available. `CALL_TRANSFER_ANNOUNCEMENT_TIMEOUT_MS` (default 30000) bounds the ACK wait.
 
@@ -166,6 +170,24 @@ docker logs --since 30m zea-voice-backend 2>&1 | rg 'CALL_ID'
 
 Enable the existing selected-call LLM trace separately when comparing the
 resumed result, generated speech and audio output.
+
+### Diagnose announcement acknowledgement failures
+
+```bash
+docker logs --since 30m zea-voice-backend 2>&1 \
+  | grep -F 'YOUR_INTERNAL_CALL_ID' \
+  | grep -E 'voice\.playback_checkpoint_sent|voice\.playback_ack_received|voice\.transfer|Stale Plivo'
+```
+
+`voice.playback_checkpoint_sent` and `voice.playback_ack_received` should carry
+the same checkpoint name and stream ID before the provider transfer request.
+`voice.transfer_request_failed` records a safe error code and `requestStarted`;
+`TRANSFER_ANNOUNCEMENT_TIMEOUT` with `requestStarted=false` means dialing was
+not attempted because playback was unconfirmed. Do not interpret this as staff
+busy. Acknowledgements can be `playedStream` or legacy `played`; see
+[Plivo protocol reference](https://www.plivo.com/docs/voice-agents/audio-streaming/concepts/audio-streaming-reference)
+and [legacy Plivo support examples](https://old-support.plivo.com/hc/en-us/sections/32252450281369-Audio-Stream).
+No audio payloads or credentials are written by these diagnostic events.
 
 See [live acceptance checklist](CALL_TRANSFER_PILOT.md). The automated
 release suite records live pilot and live DB migration as not run; it does not

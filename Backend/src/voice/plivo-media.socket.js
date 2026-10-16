@@ -56,6 +56,7 @@ export class PlivoMediaSession extends EventEmitter {
     this.started = false;
     this.closed = false;
     this.lastSequence = -1;
+    this.pendingCheckpoints = new Set();
     this.processing = Promise.resolve();
     this.pendingMessages = 0;
     this.onClosed = options.onClosed ?? noOp;
@@ -103,10 +104,15 @@ export class PlivoMediaSession extends EventEmitter {
     if (!event || typeof event !== 'object' || typeof event.event !== 'string') {
       throw new AppError(400, 'Plivo media event is invalid', 'VOICE_MEDIA_EVENT_INVALID');
     }
+    // Playback control ACKs are correlated by stream/checkpoint, not by the
+    // inbound audio high-water mark. Older Plivo control formats omit sequence
+    // numbers or use zero, and delayed ACKs can trail incoming audio frames.
+    const controlAck = ['playedStream', 'played', 'clearedAudio'].includes(event.event);
     const currentSequence = sequence(event.sequenceNumber);
-    if (currentSequence !== null) {
+    if (!controlAck && currentSequence !== null) {
       if (currentSequence <= this.lastSequence) {
-        this.log.warn({ callId: this.callId, sequenceNumber: currentSequence }, 'Stale Plivo media event ignored');
+        this.log.warn({ callId: this.callId, eventType: event.event,
+          sequenceNumber: currentSequence, lastSequence: this.lastSequence }, 'Stale Plivo media event ignored');
         return;
       }
       this.lastSequence = currentSequence;
@@ -115,7 +121,8 @@ export class PlivoMediaSession extends EventEmitter {
       case 'start': return this.#start(event);
       case 'media': return this.#media(event);
       case 'dtmf': return this.#dtmf(event);
-      case 'playedStream': return this.#played(event);
+      case 'playedStream':
+      case 'played': return this.#played(event);
       case 'clearedAudio': return this.#cleared(event);
       case 'stop': return this.#stop(event);
       default:
@@ -187,6 +194,14 @@ export class PlivoMediaSession extends EventEmitter {
   async #played(event) {
     this.#requireStarted('playedStream');
     this.#requireStream(event.streamId);
+    if (event.streamId !== this.streamId || !this.pendingCheckpoints.delete(event.name)) {
+      this.log.debug({ stage: 'voice.playback_ack_ignored', callId: this.callId,
+        eventType: event.event }, 'Unmatched or duplicate playback checkpoint ignored');
+      return;
+    }
+    this.log.info({ stage: 'voice.playback_ack_received', callId: this.callId,
+      streamId: this.streamId, checkpointName: event.name, eventType: event.event,
+      sequenceNumber: event.sequenceNumber ?? null }, 'Plivo playback checkpoint confirmed');
     this.emit('playedStream', { session: this, name: event.name ?? null, event });
   }
 
@@ -256,12 +271,20 @@ export class PlivoMediaSession extends EventEmitter {
     this.#requireStarted('checkpoint');
     const checkpointName = String(name ?? '').trim();
     if (!checkpointName || checkpointName.length > 160) throw new TypeError('Checkpoint name is required and must not exceed 160 characters');
-    this.#send({ event: 'checkpoint', streamId: this.streamId, name: checkpointName });
+    if (this.pendingCheckpoints.has(checkpointName) || this.pendingCheckpoints.size >= 128) {
+      throw new AppError(409, 'Playback checkpoint is duplicate or capacity is exhausted', 'VOICE_MEDIA_CHECKPOINT_CONFLICT');
+    }
+    this.pendingCheckpoints.add(checkpointName);
+    try { this.#send({ event: 'checkpoint', streamId: this.streamId, name: checkpointName }); }
+    catch (error) { this.pendingCheckpoints.delete(checkpointName); throw error; }
+    this.log.info({ stage: 'voice.playback_checkpoint_sent', callId: this.callId,
+      streamId: this.streamId, checkpointName }, 'Plivo playback checkpoint sent');
   }
 
   clearAudio(reason = 'interruption') {
     this.#requireStarted('clearAudio');
     this.#send({ event: 'clearAudio', streamId: this.streamId });
+    this.pendingCheckpoints.clear();
     this.emit('interruption', { session: this, reason });
   }
 
@@ -290,6 +313,7 @@ export class PlivoMediaSession extends EventEmitter {
   #finish(code, reason) {
     if (this.closed) return;
     this.closed = true;
+    this.pendingCheckpoints.clear();
     clearTimeout(this.#idleTimer);
     this.onClosed(this);
     this.emit('closed', { session: this, code, reason });

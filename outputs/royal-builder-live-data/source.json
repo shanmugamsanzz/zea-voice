@@ -1,0 +1,362 @@
+﻿[
+    {
+        "value":  [
+                      "Project ID",
+                      "Project Name/Type",
+                      "Place",
+                      "Total Available Plots",
+                      "Available Plot Numbers",
+                      "SQ.ft",
+                      "Building Sq.ft",
+                      "Plot Size",
+                      "Sq.ft Rate",
+                      "Facing",
+                      "Nearby Locations",
+                      "Approved",
+                      "Road Size"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU1",
+                      "Sri Kumaran Garden",
+                      "Thiruchnagode - Kurmarangalam",
+                      "3",
+                      "9, 10, 11",
+                      "9 ( 1672), 10 (1737), 11 (1772)",
+                      "",
+                      "Mixied sizes",
+                      "1950",
+                      "South ",
+                      "Segunathar Enginering college \u0026 Mahendria Arts \u0026 Science college.",
+                      "DTDC\u0026RERA",
+                      "35 ft.Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU2",
+                      "Diamond City",
+                      "Vallasairu Pallipatti",
+                      "11",
+                      "1,2,3,4,5,6,7,11,12,13,17",
+                      "1 (2508), 2, (2605), 3 (2018), 4 (2062) , 5(2088), 6(2087), 7(2148),11(1700),12(1923), 13 (1953), 17(2513)",
+                      "",
+                      "Mixied sizes",
+                      "1,2,17 (Road Point 3000sq.ft) \u0026 others all 2500",
+                      "1,2, (west) \u0026 17 North west \u0026 3,4,5 south facing \u0026 6 Eastern south corner\u0026 7 East\u0026 11,12,13 North",
+                      "Aravind Schools, Pallipatti panchayathu office, Pallipatti bus stop",
+                      "DTDC\u0026RERA",
+                      "35 ft.Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU3",
+                      "Selva Garden",
+                      "Mamangalam",
+                      "10",
+                      "1 to 10",
+                      "",
+                      "",
+                      "1391 to 2449",
+                      "",
+                      "",
+                      "Minakkal",
+                      "DTDC\u0026RERA",
+                      "35 ft.Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU4",
+                      "Thiruveni Garden",
+                      "Gorimedu - Kumaran Avenue",
+                      "",
+                      "",
+                      "840",
+                      "",
+                      "20x42",
+                      "6000",
+                      "South ",
+                      "",
+                      "DTDC\u0026RERA",
+                      "35 ft.Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU5",
+                      "Individual plots",
+                      "Auditor colony -Swaranapuri",
+                      "",
+                      "",
+                      "3850",
+                      "",
+                      "65x58",
+                      "6500",
+                      "North west facing",
+                      "",
+                      "--",
+                      "2 side 20 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU6",
+                      "Individual plots",
+                      "Alagapuram",
+                      "",
+                      "",
+                      "750",
+                      "",
+                      "25x30",
+                      "4000",
+                      "north",
+                      "",
+                      "--",
+                      "10 Feet Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU7",
+                      "Individual plots",
+                      "Kanakurchi, Adivaram mordern theatre back side",
+                      "",
+                      "",
+                      "4058",
+                      "",
+                      "L shape",
+                      "4500",
+                      "west",
+                      "Modern theatre back side anna nagar",
+                      "DTDC\u0026RERA",
+                      "20 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU8",
+                      "Individual plots",
+                      "Ponamapatte main road",
+                      "",
+                      "",
+                      "2600",
+                      "",
+                      "50x52",
+                      "6500",
+                      "South ",
+                      "Jayamurgam mandapam road - ponnamapet main road",
+                      "DTDC\u0026RERA",
+                      "35 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU9",
+                      "Individual plots",
+                      "Chinna Thirpathi NGO colony",
+                      "",
+                      "",
+                      "15000",
+                      "",
+                      "72x180",
+                      "3500",
+                      "West",
+                      "Chinna Thirupati Temple",
+                      "DTDC\u0026RERA",
+                      "25 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU10",
+                      "Individual plots",
+                      "Kanakurchi, Theyaraja near",
+                      "",
+                      "",
+                      "1950",
+                      "",
+                      "30x65",
+                      "4500",
+                      "South ",
+                      "Kannakurchi to manarpalayam main road",
+                      "DTDC\u0026RERA",
+                      "30 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU11",
+                      "Individual plots",
+                      "Karupur - Shree Bhoomi",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "30x52",
+                      "3800",
+                      "South ",
+                      "SSRM School",
+                      "DTDC\u0026RERA",
+                      "30 Feet Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU12",
+                      "Individual plots",
+                      "Kanakurchi, Police station back side",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "45x50",
+                      "4500",
+                      "west",
+                      "Kannakurchi Police Station",
+                      "DTDC\u0026RERA",
+                      "25 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU13",
+                      "Varma Garden",
+                      "Kanakurchi",
+                      "",
+                      "",
+                      "1350",
+                      "",
+                      "",
+                      "5250",
+                      "South ",
+                      "Kannakurchi High School",
+                      "DTDC\u0026RERA",
+                      "33 Feet Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU14",
+                      "Individual plots",
+                      "Judge Road Bus stop",
+                      "",
+                      "",
+                      "6797",
+                      "",
+                      "80x89",
+                      "9000",
+                      "east",
+                      "",
+                      "DTDC\u0026RERA",
+                      "30 feet road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU15",
+                      "Shree Nagar",
+                      "Venathoor Minakal Privu",
+                      "",
+                      "20,21,14,15,16,18,19",
+                      "--",
+                      "--",
+                      "Mixied sizes",
+                      "1500",
+                      "20,21 South Facing \u0026 14 East \u0026 other west",
+                      "",
+                      "DTDC\u0026RERA",
+                      "33 Feet Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU16",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      "",
+                      ""
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU17",
+                      "Building",
+                      "Place",
+                      "",
+                      "No of Houses",
+                      "Sq.Ft",
+                      "Building Sq.Ft",
+                      "",
+                      "Building Rate",
+                      "",
+                      "",
+                      "",
+                      ""
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU18",
+                      "Building",
+                      "Balabharathi Matric School ",
+                      "",
+                      "",
+                      "455",
+                      "955",
+                      "",
+                      "95 Lakhs",
+                      "North",
+                      "Balabharathi Matric School ",
+                      "",
+                      "100 Feet Road"
+                  ],
+        "Count":  13
+    },
+    {
+        "value":  [
+                      "NRBU19",
+                      "Building",
+                      "Kanakurchi",
+                      "",
+                      "4",
+                      "1350",
+                      "3300",
+                      "",
+                      "95 Lakhs",
+                      "west",
+                      "Kanakurchi Bus Stand",
+                      "approved",
+                      "20 feet road"
+                  ],
+        "Count":  13
+    }
+]

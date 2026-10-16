@@ -154,6 +154,9 @@ export function createCallTransferService(dependencies = {}) {
         catch { log.warn({ stage: 'voice.transfer_stream_stop_failed', callId: call.id }, 'Transfer queued; stream cleanup will be retried by the dial callback'); }
         return { success: true, transferRequested: true, connected: false, transferId: row.id };
       } catch (error) {
+        log.warn({ stage: 'voice.transfer_request_failed', callId: call.id,
+          transferId: row.id, requestStarted, errorCode: error?.code ?? 'TRANSFER_REQUEST_FAILED' },
+        'Transfer preparation or provider request failed');
         // An HTTP timeout is ambiguous: never restore AI or retry Dial blindly.
         // Route the existing A-leg to a signed recovery endpoint instead.
         const latest = await repo.get(row.id);
