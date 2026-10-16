@@ -9,6 +9,7 @@ import { callTransferTool } from './tools/call-transfer-tool.js';
 import { callTransferService } from './call-transfer.service.js';
 import { transferRuntimes } from './transfer-runtime-registry.js';
 import { TransferFollowUp } from './transfer-follow-up.js';
+import { waitForTransferPlayback } from './transfer-audio.js';
 import { hasDynamicPromptValues, loadDynamicPromptValues, buildDynamicPromptValues,
   renderDynamicPrompt } from './dynamic-prompt-values.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
@@ -402,7 +403,7 @@ export class RealtimeConversationOrchestrator {
       this.runtimeProfile = { ...this.runtimeProfile, tools: [...(this.runtimeProfile.tools ?? []), callTransferTool] };
       this.transferRuntime = { call: this.call, orchestrator: this,
         streamActive: () => !this.mediaSession.closed,
-        pause: () => this.#pauseTransfer(), detach: () => this.#detachTransfer(),
+        pause: options => this.#pauseTransfer(options), detach: () => this.#detachTransfer(),
         restore: async result => {
           try { return await this.#restoreTransfer(result); }
           catch (error) { this.transferPaused = false; return this.#recover(error, 'transfer_resume'); }
@@ -1050,7 +1051,7 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
-  async #pauseTransfer() {
+  async #pauseTransfer({ announcement = '', requireAnnouncement = false } = {}) {
     if (this.finalized || this.transferPaused) return;
     // Set this before any awaited cancellation: Plivo can close the stream immediately.
     this.transferPaused = true;
@@ -1064,6 +1065,32 @@ export class RealtimeConversationOrchestrator {
     await this.#cancelActive('call_transfer');
     await this.audioEngine.pauseForTransfer();
     await this.adapters.stt.cancel('call_transfer');
+    if (requireAnnouncement) {
+      try {
+        const response = announcement || (await this.#generateUtilitySpeech(
+          'The caller has already agreed to staff transfer. Give only a brief pre-transfer announcement following the configured prompt and caller language. Ask them to wait on the line. Do not ask another question, say staff are connected, or promise a callback.',
+          this.liveCallMemory?.promptMessages?.() ?? this.controller.history, { maxOutputTokens: 100 },
+        )).text;
+        const message = this.#fitTtsMessage(response);
+        if (!message || this.finalized) throw new AppError(409, 'Transfer announcement is unavailable', 'TRANSFER_ANNOUNCEMENT_UNAVAILABLE');
+        this.audioEngine.start();
+        await this.controller.beginSystemResponse('transfer_announcement');
+        await this.controller.setAssistantResponse(message, Date.now(), { sources: [] });
+        const played = await this.#synthesize(message, `transfer-announcement-${this.epoch}`, { epoch: this.epoch });
+        if (!played || this.finalized) throw new AppError(409, 'Transfer announcement was interrupted', 'TRANSFER_ANNOUNCEMENT_INTERRUPTED');
+        // Local queue drain is not proof of remote playback. Stop ambience frames,
+        // send a checkpoint after the speech frames, then await Plivo's matching ACK.
+        await this.audioEngine.stopPlaybackPacing();
+        const confirmation = await waitForTransferPlayback(this.mediaSession, {
+          timeoutMs: env.CALL_TRANSFER_ANNOUNCEMENT_TIMEOUT_MS,
+        });
+        this.#traceTurn(this.epoch, 'transfer_announcement_played', confirmation, 'voice.playback_trace');
+        if (this.controller.state === callStates.SPEAKING) await this.controller.playbackComplete();
+      } finally {
+        await this.audioEngine.pauseForTransfer();
+        if (!this.finalized && this.controller.state === callStates.SPEAKING) await this.controller.interrupt('transfer_announcement_finished');
+      }
+    }
     await this.transcriptPersistence?.flush?.();
   }
 
@@ -2477,6 +2504,7 @@ export class RealtimeConversationOrchestrator {
                 currentUserMessage: toolCall.currentUserMessage,
                 conversation: toolCall.conversation,
                 collectedDetails: toolCall.collectedDetails,
+                preActionSpeech: toolCall.preActionSpeech,
                 authorizationRecordId: toolCall.authorizationRecordId,
               }],
               {

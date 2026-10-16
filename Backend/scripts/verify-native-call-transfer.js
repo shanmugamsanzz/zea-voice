@@ -88,6 +88,7 @@ assert.equal([...s.rows.values()][0].state, 'requested');
 const dialXml = await s.service.callback(dial);
 assert.match(dialXml, /timeout="25"/); assert.match(dialXml, /<Number>\+919000000002<\/Number>/);
 assert.match(dialXml, /callerId="\+918000000001"/);
+assert.match(dialXml, /dialMusic="https:\/\/voice.example.com\/webhooks\/plivo\/transfer-music"/);
 assert.equal(s.operations.at(-1), 'detach');
 assert.equal(s.runtime.history[0].content, 'Patient Surya, Salem, leg pain');
 await s.service.callback(s.callback('events', { DialALegUUID: call.providerCallId,

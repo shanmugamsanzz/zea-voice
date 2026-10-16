@@ -10,8 +10,10 @@ const tool = { id: 'callback-a', name: 'request_staff_callback', inputSchema: { 
 const attempt = { id: 'transfer-a', mode: 'wait_and_return', callback_tool_id: tool.id };
 const result = output => ({ toolId: tool.id, verified: true, success: output?.success === true, output });
 assert.equal(isCallTransferEnabledForAgent('agent-a', { CALL_TRANSFER_ENABLED: false, CALL_TRANSFER_AGENT_IDS: 'agent-a' }), false);
-assert.equal(isCallTransferEnabledForAgent('agent-a', { CALL_TRANSFER_ENABLED: true, CALL_TRANSFER_AGENT_IDS: '' }), false);
-assert.equal(isCallTransferEnabledForAgent('agent-b', { CALL_TRANSFER_ENABLED: true, CALL_TRANSFER_AGENT_IDS: 'agent-a' }), false);
+assert.equal(isCallTransferEnabledForAgent('agent-a', { CALL_TRANSFER_ENABLED: true, CALL_TRANSFER_AGENT_IDS: '' }), true);
+assert.equal(isCallTransferEnabledForAgent('agent-b', { CALL_TRANSFER_ENABLED: true, CALL_TRANSFER_AGENT_IDS: 'agent-a' }), true,
+  'Retired pilot allowlist must not block other agents with enabled company-scoped settings');
+assert.equal(isCallTransferEnabledForAgent(null, { CALL_TRANSFER_ENABLED: true }), false);
 assert.equal(isCallTransferEnabledForAgent('agent-a', { CALL_TRANSFER_ENABLED: true, CALL_TRANSFER_AGENT_IDS: ' agent-a ' }), true);
 const state = new TransferFollowUp();
 assert.equal(state.promptContext(), ''); state.setOutcome({ status: 'busy' }); assert.equal(state.outcome, null);
@@ -77,4 +79,4 @@ assert.equal(payload.callerPhoneNumber, outbound.to); assert.equal(payload.mobil
 assert.equal(payload.callContext.fromNumber, outbound.from, 'Call direction metadata remains unchanged');
 await assert.rejects(executeAgentTool(profile, { ...outbound, to: null },
   { name: tool.name, authorizationRecordId: tool.id, arguments: {} }, dependencies), error => error.code === 'TRANSFER_CALLBACK_PHONE_MISSING');
-console.log('Transfer follow-up passed: persistent verified context, callback contract, failed-action response, pending/saved/notification distinctions, duplicate action suppression, retry after failure, call isolation and one-agent/default-off rollout. No live calls were made.');
+console.log('Transfer follow-up passed: persistent verified context, callback contract, failed-action response, pending/saved/notification distinctions, duplicate action suppression, retry after failure, call isolation and global/default-off rollout without agent allowlists. No live calls were made.');

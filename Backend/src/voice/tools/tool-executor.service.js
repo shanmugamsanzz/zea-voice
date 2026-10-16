@@ -118,7 +118,9 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       throw new AppError(403, 'Transfer requires workflow authorization', 'TRANSFER_NOT_AUTHORIZED');
     }
     validateToolArguments(toolCall.arguments ?? {}, callTransferTool.configuration.inputSchema);
-    const output = await (dependencies.callTransferService ?? callTransferService).request(call);
+    const output = await (dependencies.callTransferService ?? callTransferService).request(call, {
+      announcement: cleanText(toolCall.preActionSpeech, 600),
+    });
     return { id: toolCall.id ?? null, toolId: tool.id, name: tool.name,
       success: output.success === true, verified: true, output, durationMs: performance.now() - startedAt };
   }

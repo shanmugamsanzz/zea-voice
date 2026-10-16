@@ -10,6 +10,7 @@ import { transferRuntimes } from './transfer-runtime-registry.js';
 import { createTransferRepository } from './call-transfer.repository.js';
 import { isCallTransferEnabledForAgent } from './call-transfer-feature.js';
 import { verifiedTransferResult } from './transfer-follow-up.js';
+import { transferMusicUrl } from './transfer-audio.js';
 
 const activeStates = ['requested', 'ringing', 'bridged', 'resuming'];
 const failures = new Set(['busy', 'failed', 'cancel', 'timeout', 'no-answer']);
@@ -127,7 +128,7 @@ export function createCallTransferService(dependencies = {}) {
       runtimes.set(runtime.call.id, runtime);
     },
     unregister(callId) { stopHeartbeat(callId); runtimes.delete(callId); },
-    async request(call) {
+    async request(call, { announcement = '' } = {}) {
       if (!enabled(call)) throw new AppError(409, 'Native transfer is disabled for this agent', 'TRANSFER_DISABLED');
       const runtime = runtimes.get(call.id);
       if (!runtime || runtime.call.tenantId !== call.tenantId || runtime.call.providerCallId !== call.providerCallId) {
@@ -139,10 +140,10 @@ export function createCallTransferService(dependencies = {}) {
       event(row, 'requested');
       let requestStarted = false;
       try {
-        await runtime.pause();
+        holdOwnership(call, row);
+        await runtime.pause({ announcement, requireAnnouncement: true });
         const current = await repo.get(row.id);
         if (current?.call_ended_at || current?.state === 'canceled') return { success: false, reason: 'caller_hung_up' };
-        holdOwnership(call, row);
         requestStarted = true;
         const response = await api(dependencies.transfer ?? transferPlivoCall, row, row.provider_call_id, callbackUrl(row.id, 'dial'));
         if (!['transfer executed', 'call transferred'].includes(response?.message)) {
@@ -211,7 +212,7 @@ export function createCallTransferService(dependencies = {}) {
         // No LLM/AI audio continues into the staff bridge.
         await runtime.detach();
         event(row, 'ringing');
-        return `<Response><Dial timeout="${row.ring_timeout_seconds}" callerId="${xml(row.caller_id)}" action="${xml(callbackUrl(row.id, 'result'))}" method="POST" redirect="true" callbackUrl="${xml(callbackUrl(row.id, 'events'))}" callbackMethod="POST"><Number>${xml(row.destination_number)}</Number></Dial></Response>`;
+        return `<Response><Dial timeout="${row.ring_timeout_seconds}" callerId="${xml(row.caller_id)}" dialMusic="${xml(transferMusicUrl(base()))}" action="${xml(callbackUrl(row.id, 'result'))}" method="POST" redirect="true" callbackUrl="${xml(callbackUrl(row.id, 'events'))}" callbackMethod="POST"><Number>${xml(row.destination_number)}</Number></Dial></Response>`;
       }
       if (input.action === 'recover') return resumeXml(row, 'request_failed');
       if (input.action === 'result') {

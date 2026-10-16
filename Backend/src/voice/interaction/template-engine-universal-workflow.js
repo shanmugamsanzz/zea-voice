@@ -136,6 +136,7 @@ export async function applyUniversalWorkflowResult({
     currentUserMessage: cleanText(conversationContext?.currentQuestion, 2_000),
     conversation: conversationContext?.recentConversation ?? [],
     collectedDetails: argumentsValue,
+    preActionSpeech: cleanText(speech, 600),
   }));
   const verifiedFollowUpResult = definition.workflowId === 'builtin:manage_follow_up'
     && toolResult?.toolId === 'builtin:manage_follow_up' && toolResult.verified === true

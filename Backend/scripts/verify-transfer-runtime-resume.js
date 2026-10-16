@@ -18,6 +18,7 @@ class Media extends EventEmitter {
   constructor() { super(); this.call = call; this.callId = call.id; this.providerCallId = call.providerCallId;
     this.started = true; this.closed = false; this.transport = 'plivo'; this.log = log; }
   clearAudio() {}
+  checkpoint(name) { this.checkpointName = name; }
   close() { this.closed = true; this.emit('stop'); this.emit('closed', { code: 1000, reason: 'test_stream_closed' }); }
 }
 let resumed = 0; let finalized = 0; let sttConnections = 0; let paused = 0;
@@ -31,6 +32,7 @@ const transferService = { available: async () => true,
 const audio = { start() {}, cancelStaleAudio: () => ({ removedFrames: 0 }),
   pauseForTransfer: async () => { paused++; }, beginOutputGeneration() {},
   enqueueSynthesized: async () => true, flushSynthesized: async () => {}, drainOutput: async () => {}, close: async () => {},
+  stopPlaybackPacing: async () => {},
 };
 const original = new Media();
 const runtime = new RealtimeConversationOrchestrator(original, {
@@ -61,25 +63,35 @@ await runtime.controller.receiveFinalTranscript('Yes, transfer me.');
 const controller = runtime.controller; const memory = runtime.liveCallMemory; const usage = runtime.usageTracker;
 const before = runtime.controller.history;
 const entry = transferRuntimes.get(call.id);
-await entry.pause(); await entry.detach();
-assert.equal(paused, 1); assert.equal(runtime.finalized, false);
+let pauseFinished = false;
+const announcement = 'Hospital team-kitta connect panna try panren nga. Konjam line-la wait pannunga.';
+const pause = entry.pause({ announcement, requireAnnouncement: true }).then(() => { pauseFinished = true; });
+await ticks(() => Boolean(original.checkpointName));
+assert.equal(played[0], announcement);
+assert.equal(pauseFinished, false, 'Local TTS drain must not finish the transfer preamble without provider ACK');
+original.emit('playedStream', { name: 'another-checkpoint' });
+assert.equal(pauseFinished, false);
+original.emit('playedStream', { name: original.checkpointName });
+await pause; await entry.detach();
+assert.equal(paused, 2); assert.equal(runtime.finalized, false);
 assert.equal(finalized, 0, 'An intentional stream stop must not complete/bill the caller call');
 assert.equal(original.transferPending, true);
-assert.deepEqual(runtime.controller.history, before);
+assert.deepEqual(runtime.controller.history.slice(0, before.length), before);
+assert.equal(runtime.controller.history.at(-1).content, announcement);
 entry.resumeResult = { verified: true, transferId: 'attempt-a', status: 'busy', mode: 'wait_and_return', connected: false, callbackSaved: false };
 const replacement = new Media();
 assert.equal(attachRealtimeConversationOrchestrator(replacement), runtime);
 replacement.emit('start');
-await ticks(() => played.length === 1 && runtime.controller.state === 'listening');
+await ticks(() => played.length === 2 && runtime.controller.state === 'listening');
 assert.equal(resumed, 1); assert.equal(sttConnections, 2);
 assert.equal(runtime.controller, controller); assert.equal(runtime.liveCallMemory, memory);
 assert.equal(runtime.usageTracker, usage); assert.equal(audio.mediaSession, replacement);
-assert.equal(requests.length, 1); assert.equal(played.length, 1);
+assert.equal(requests.length, 1); assert.equal(played.length, 2);
 assert.match(JSON.stringify(requests[0].messages), /Patient Surya from Salem has leg pain/);
 assert.match(requests[0].messages.at(-1).content, /"status":"busy"/);
 assert.match(runtime.transferFollowUp.promptContext(runtime.runtimeProfile.tools), /"status":"busy"/);
 assert.match(runtime.transferFollowUp.promptContext(runtime.runtimeProfile.tools), /No staff callback action is configured/);
-assert.doesNotMatch(played[0], /welcome|vanakkam|hello/i);
+assert.doesNotMatch(played[1], /welcome|vanakkam|hello/i);
 assert.equal(runtime.finalized, false);
 await entry.pause(); await entry.bridged();
 assert.deepEqual(closedProviders.sort(), ['llm', 'stt', 'tts'], 'Staff answer releases AI provider connections');

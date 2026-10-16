@@ -173,6 +173,8 @@ export class ProviderIndependentAudioEngine {
     await this.pacer.stop();
   }
 
+  stopPlaybackPacing() { return this.pacer.stop(); }
+
   async enqueueInbound(chunk, metadata = {}) {
     const converted = this.inboundConverter.push(chunk);
     if (!converted.length) return;

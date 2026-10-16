@@ -1,34 +1,32 @@
-# Native call transfer: one-agent pilot
+# Native call transfer: live acceptance checklist
 
-Code and automated verification are prepared. Production deployment, database
-migration and live Plivo calls have **not** been performed by this change.
-The live pilot needs the environment/access method and approved caller/staff test
-numbers. Never use historical call recipients as test participants by assumption.
+The operator reports the original pilot is complete. Announcement sequencing and
+hold music have automated verification; this code change does not perform a new
+production deployment or live phone test. Use approved participants for audio
+acceptance. Never use historical call recipients as test participants by assumption.
 
 ## Scope and activation
 
-Proposed agent: Balaji Anu, `146e5fb6-870d-4d65-9b9e-3b52c2ed948e`.
-Confirm this target before activating the live pilot. Use one backend process;
-context retention is in process. Keep the current n8n workflow available until
-the native pilot is accepted, but point the pilot prompt at `transfer_call`.
+Use one backend process; context retention is in process. Point each enabled
+agent's prompt at `transfer_call`. Staff destinations and credentials remain
+separate company/agent settings.
 
 Default/release configuration:
 
 ```dotenv
 CALL_TRANSFER_ENABLED=false
-CALL_TRANSFER_AGENT_IDS=
 ```
 
-After migrations and environment checks, pilot activation configuration:
+After migrations and environment checks, global activation configuration:
 
 ```dotenv
 CALL_TRANSFER_ENABLED=true
-CALL_TRANSFER_AGENT_IDS=146e5fb6-870d-4d65-9b9e-3b52c2ed948e
+CALL_TRANSFER_ANNOUNCEMENT_TIMEOUT_MS=30000
 ```
 
-Both settings are required. An empty list or another agent UUID denies native
-execution even when enabled settings exist. The call must belong to the same
-company/workspace and configured Plivo subaccount. Do not alter other agents.
+Enable the checkbox separately for each agent. No environment agent list is
+required; the old CALL_TRANSFER_AGENT_IDS value is ignored and can be removed.
+The call must belong to the same company/workspace and configured Plivo subaccount.
 
 In Agent → Tools configure the approved staff test number, ring timeout, mode
 and optional callback webhook. Validate that webhook saves a real request before
@@ -50,7 +48,7 @@ Prompt instructions for the pilot (adapt wording to the agent language):
 
 From Backend run `npm run verify:call-transfer` and `npm run check`.
 From Frontend run `npm run lint` and `npm run build`.
-The release suite runs 12 transfer/call/tool/callback/browser/capacity checks.
+The release suite runs 13 transfer/audio/call/tool/callback/browser/capacity checks.
 Tests use mocked provider/database operations and a real local WebSocket where
 applicable; passing these is not proof of a live phone bridge or production RLS.
 
@@ -62,6 +60,8 @@ callback request ID if any, tester and pass/fail. Use consenting test participan
 | Scenario | Expected evidence |
 | --- | --- |
 | Staff answers, both modes | One staff leg, verified answer/connected event, caller/staff audio, AI silent, caller remains connected |
+| Announcement and music | Full prompt-controlled announcement before staff dialing; matching playback checkpoint; music instead of ringing; stops on answer/failure |
+| Missing/cleared playback ACK | No staff dialing; caller assistance recovers when media is available |
 | Staff busy/rejects, both modes | Wait mode resumes existing context; direct mode announces failure then ends |
 | No answer until configured timeout, both modes | Timeout honored; same mode-specific result; no automatic callback promise |
 | Caller hangs up while ringing, both modes | Staff ringing stops; pending transfer canceled; no AI reconnect |
@@ -72,7 +72,7 @@ callback request ID if any, tester and pass/fail. Use consenting test participan
 | Callback webhook fails/returns bare success | No promise, no notification claim; assistance continues |
 | Caller declines callback or wants more help | No callback submission; answer current question and preserve known fields |
 | Another company's account/tool/agent | Setting/execution denied; no cross-company call or context |
-| Flag off or agent not allowlisted | Native tool unavailable; existing call/webhook behavior retained |
+| Flag off or agent checkbox off | Native tool unavailable; existing call/webhook behavior retained |
 
 Use Plivo delivery logs plus `voice.transfer` and selected-call LLM/playback traces
 to compare actual callbacks, generated speech and audible caller experience.
@@ -82,9 +82,8 @@ as a new credit-ledger charge by this implementation; verify billing separately.
 ## Rollback and acceptance
 
 Stop admitting new native transfers by setting `CALL_TRANSFER_ENABLED=false` or
-removing the pilot UUID from the list. Keep callback routes/schema and the owning
+disabling the agent's transfer checkbox. Keep callback routes/schema and the owning
 backend process alive until in-flight transfers end. Then revert/restart if needed.
 Do not drop transfer tables or change the credential encryption key mid-call.
 
-Expand beyond the single agent only after the live matrix passes and owner
-routing/shared retention is implemented for any multi-process deployment.
+Owner routing/shared retention is required before any multi-process deployment.

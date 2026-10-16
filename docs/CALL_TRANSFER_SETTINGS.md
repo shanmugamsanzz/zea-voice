@@ -1,4 +1,4 @@
-﻿# Built-in Call Transfer (Tasks 1 and 2)
+# Built-in Call Transfer
 
 Save the agent, then open Agent → Tools → Built-in Call Transfer. Select a
 connected company Plivo subaccount or enter that registered subaccount's Auth ID
@@ -9,13 +9,13 @@ LLM never receive these tokens.
 
 ## Activation
 
-The server flag `CALL_TRANSFER_ENABLED` defaults to **false**. The additional
-`CALL_TRANSFER_AGENT_IDS` allowlist defaults to empty (no eligible agents). Existing agents
+The server flag `CALL_TRANSFER_ENABLED` defaults to **false**. When enabled,
+each agent's saved **Enable built-in call transfer** checkbox controls access. Existing agents
 and webhook/n8n tools keep their current behavior. Saving enabled settings alone
 does not turn on the server flag. Agents without enabled settings do not get the
 built-in tool. Browser tests cannot execute a telephone transfer.
 
-Before a pilot deployment:
+Activation after deployment:
 
 1. Apply all three migrations through the normal backend migration process:
    `1792100000000_agent-call-transfer-settings.js` and
@@ -24,8 +24,7 @@ Before a pilot deployment:
 2. Keep the existing `CREDENTIAL_ENCRYPTION_KEY`. Set `PUBLIC_BASE_URL` to the
    publicly reachable HTTPS backend origin. Plivo must reach POST routes under
    `/webhooks/plivo/transfer/` and reconnect to `/webhooks/plivo/media`.
-3. Set `CALL_TRANSFER_AGENT_IDS` to exactly one approved agent UUID. Enable
-   `CALL_TRANSFER_ENABLED=true` on the pilot backend, then enable settings
+3. Set `CALL_TRANSFER_ENABLED=true` once on the backend, then enable settings
    for the selected agent. The selected subaccount must also own the live call;
    another account in the same company is insufficient.
 4. Update that agent's prompt/workflow to use **`transfer_call`** when appropriate.
@@ -42,7 +41,10 @@ Before a pilot deployment:
 
 The settings API remains GET/PUT/DELETE `/agents/:agentId/call-transfer-settings`
 for authenticated company developer/Super Admin sessions in the selected
-workspace. `runtimeAvailable` reports flag and agent allowlist eligibility.
+workspace. `runtimeAvailable` reports the global server flag. The retired
+`CALL_TRANSFER_AGENT_IDS` environment variable is ignored and may be removed;
+adding another agent/company no longer requires an environment edit or restart.
+Company/workspace/account checks still apply to every transfer.
 
 ## Live behavior
 
@@ -52,12 +54,28 @@ and destination from the active call's company/workspace. Tool arguments cannot
 override credentials, destination, caller ID or call UUID.
 
 Anu's current generation, output audio, STT and inactivity/duration timers pause.
+The prompt's workflow speech is played as the pre-transfer announcement using the
+agent's selected voice. If absent, the runtime generates a short announcement
+using that prompt/language. It drains the audio frames, stops background pacing,
+then sends a unique Plivo checkpoint. Staff dialing begins only after the matching
+`playedStream` acknowledgement. A missing/cleared/interrupted acknowledgement
+fails safely without dialing staff and resumes assistance where media remains
+available. `CALL_TRANSFER_ANNOUNCEMENT_TIMEOUT_MS` (default 30000) bounds the ACK wait.
+
 The backend queues a Plivo A-leg transfer before stopping the original media
 stream. Its signed Dial webhook returns XML with the configured ring timeout,
 the platform's existing caller ID and the fixed staff destination. Plivo bridges
 the original caller and staff when staff answer. Anu does **not** hang up the
 caller's telephone leg. After staff have answered, the eventual end of that
 conversation ends the caller leg; Anu does not rejoin after a successful bridge.
+
+While staff ring, `Dial.dialMusic` points to the backend's public
+`/webhooks/plivo/transfer-music` XML, which loops the existing original generated
+4-second WAV at `/webhooks/plivo/hold-music.wav?seconds=4`. No external music URL,
+upload or credentials are needed. Those public endpoints contain no tenant data
+and perform no call-control writes. Other Dial/result callbacks remain signed.
+Music stops when staff answer or the configured ring timeout is reached.
+Announcement wording stays in the prompt; audio order and music are backend controlled.
 
 | Result | Wait and return on failure | Direct handoff |
 | --- | --- | --- |
@@ -109,7 +127,7 @@ complete/bill the call. A periodic provider CDR check detects a missed final
 hangup callback. Original AI provider usage is retained; staff B-leg telephony
 charges are not added as a new credit-ledger charge by this task.
 
-Runtime retention is **in process**. Run the pilot on one backend process. For
+Runtime retention is **in process**. Use one backend process. For
 multiple workers/replicas, callback and resumed media routing must reach the call
 owner; shared persistence or owner routing is required before enabling this in a
 multi-worker deployment. Do not claim restart-safe conversation restoration.
@@ -149,7 +167,7 @@ docker logs --since 30m zea-voice-backend 2>&1 | rg 'CALL_ID'
 Enable the existing selected-call LLM trace separately when comparing the
 resumed result, generated speech and audio output.
 
-See [one-agent pilot and acceptance record](CALL_TRANSFER_PILOT.md). The automated
+See [live acceptance checklist](CALL_TRANSFER_PILOT.md). The automated
 release suite records live pilot and live DB migration as not run; it does not
 deploy, enable a production agent, or call third-party numbers.
 

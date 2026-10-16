@@ -9,11 +9,18 @@ import { plivoAnswerPayloadSchema } from '../voice/voice.schemas.js';
 import { inboundCallQueue } from '../voice/inbound-call-queue.service.js';
 import { finishValidatedFollowUp } from '../calls/follow-up-dispatch.service.js';
 import { callTransferService } from '../voice/call-transfer.service.js';
+import { buildTransferMusicXml } from '../voice/transfer-audio.js';
+import { env } from '../config/env.js';
 
 const paramsSchema = z.object({ attemptId: z.string().uuid(), eventType: z.enum(['ring', 'hangup']) });
 const storedHangupQuerySchema = z.object({ attempt_id: z.string().uuid() });
 const recordingQuerySchema = z.object({ call_id: z.string().uuid() });
 export const plivoWebhookRouter = Router();
+
+// Public static media instructions only. No call state or tenant information.
+plivoWebhookRouter.all('/transfer-music', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300').type('application/xml').send(buildTransferMusicXml(env.PUBLIC_BASE_URL));
+});
 
 plivoWebhookRouter.post('/transfer/:id/:action', async (req, res) => {
   const parsed = z.object({ id: z.string().uuid(), action: z.enum(['dial', 'result', 'events', 'recover']) }).safeParse(req.params);
