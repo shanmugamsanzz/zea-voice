@@ -22,7 +22,7 @@ named `zea-voice-embedding-model-cache` volume. The backend verifies the model
 returns exactly 384 dimensions before it becomes ready. Run the repeatable
 latency benchmark from `Backend` with:
 
-```powershell
+```powershell test
 npm run benchmark:embedding
 ```
 
