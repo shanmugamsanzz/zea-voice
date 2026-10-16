@@ -8,11 +8,24 @@ import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { plivoAnswerPayloadSchema } from '../voice/voice.schemas.js';
 import { inboundCallQueue } from '../voice/inbound-call-queue.service.js';
 import { finishValidatedFollowUp } from '../calls/follow-up-dispatch.service.js';
+import { callTransferService } from '../voice/call-transfer.service.js';
 
 const paramsSchema = z.object({ attemptId: z.string().uuid(), eventType: z.enum(['ring', 'hangup']) });
 const storedHangupQuerySchema = z.object({ attempt_id: z.string().uuid() });
 const recordingQuerySchema = z.object({ call_id: z.string().uuid() });
 export const plivoWebhookRouter = Router();
+
+plivoWebhookRouter.post('/transfer/:id/:action', async (req, res) => {
+  const parsed = z.object({ id: z.string().uuid(), action: z.enum(['dial', 'result', 'events', 'recover']) }).safeParse(req.params);
+  if (!parsed.success) throw new AppError(400, 'Invalid transfer callback', 'VALIDATION_ERROR');
+  // Query parameters are not part of these canonical callback URLs.
+  if (Object.keys(req.query).length) throw new AppError(400, 'Unexpected transfer callback query', 'VALIDATION_ERROR');
+  const response = await callTransferService.callback({ ...parsed.data, payload: req.body ?? {},
+    signature: req.get('x-plivo-signature-v3'), mainSignature: req.get('x-plivo-signature-ma-v3'),
+    nonce: req.get('x-plivo-signature-v3-nonce') });
+  if (response === null) return res.sendStatus(204);
+  return res.type('application/xml').send(response);
+});
 
 plivoWebhookRouter.post('/recording', async (req, res) => {
   const parsed = recordingQuerySchema.safeParse(req.query);

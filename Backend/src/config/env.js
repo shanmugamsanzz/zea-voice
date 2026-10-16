@@ -14,6 +14,8 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   LOG_FORMAT: z.enum(['human', 'json']).default('human'),
   LLM_REQUEST_TRACE_ENABLED: booleanFromString.default(false),
+  CALL_TRANSFER_ENABLED: booleanFromString.default(false),
+  CALL_TRANSFER_AGENT_IDS: z.string().default(''),
   LLM_REQUEST_TRACE_CALL_IDS: z.string().default(''),
   LLM_REQUEST_TRACE_CALL_IDS_FILE: z.string().default(''),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),

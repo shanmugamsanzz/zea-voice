@@ -13,6 +13,7 @@ import { AmbienceManager } from './AmbienceManager';
 import { AgentKnowledgeDocumentsPanel } from './AgentKnowledgeDocumentsPanel';
 import { AgentLiveDataPanel } from './AgentLiveDataPanel';
 import { AgentPromptEditor } from './AgentPromptEditor';
+import { CallTransferSettingsPanel } from './CallTransferSettingsPanel';
 import { TableActionsMenu } from '../common/TableActionsMenu';
 import { 
   Bot, 
@@ -2692,6 +2693,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         {/* TAB: TOOLS */}
         {activeTab === 'tools' && (
           <div className="space-y-6">
+            {agentId && !isReadOnly && <CallTransferSettingsPanel key={agentId} agentId={agentId} />}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div><h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">Live Conversational Tool Integrations</h3><p className="mt-1 text-[11px] font-medium text-slate-400">Tools registered here belong only to this saved agent and company workspace.</p></div>
               <div className="flex flex-wrap items-center gap-2">

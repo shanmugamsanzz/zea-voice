@@ -140,14 +140,17 @@ export async function applyUniversalWorkflowResult({
   const verifiedFollowUpResult = definition.workflowId === 'builtin:manage_follow_up'
     && toolResult?.toolId === 'builtin:manage_follow_up' && toolResult.verified === true
     && (typeof toolResult.output?.scheduled === 'boolean' || typeof toolResult.output?.canceled === 'boolean');
+  const verifiedTransferFollowUp = toolResult?.verified === true
+    && toolResult.toolId === definition.workflowId && toolResult.transferFollowUp?.verified === true
+    && toolResult.transferFollowUp.toolId === definition.workflowId;
   // A business rejection/clarification is a verified result for the LLM, not
   // a transport failure. Keep its success=false for action observability.
-  if (!toolResult?.success && !verifiedFollowUpResult) throw new AppError(502, 'The configured workflow tool failed',
+  if (!toolResult?.success && !verifiedFollowUpResult && !verifiedTransferFollowUp) throw new AppError(502, 'The configured workflow tool failed',
     'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_TOOL_FAILED');
   const nextState = activeWorkflowId === definition.workflowId
     ? workflowState(state, {}, null, null) : state;
   await persistWorkflowState?.(nextState);
   return Object.freeze({ state: nextState,
-    workflow: Object.freeze({ id: definition.workflowId, status: 'completed' }),
+    workflow: Object.freeze({ id: definition.workflowId, status: verifiedTransferFollowUp && !toolResult.success ? 'failed' : 'completed' }),
     toolExecuted: true, toolResult });
 }

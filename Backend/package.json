@@ -11,6 +11,7 @@
     "build": "npm run check",
     "start": "node src/server.js",
     "check": "node scripts/check-javascript.js",
+    "verify:call-transfer": "node scripts/verify-call-transfer-release.js",
     "verify:conversation-storage": "node scripts/verify-conversation-storage.js",
     "verify:agent-conversation-configuration": "node scripts/verify-agent-conversation-configuration.js",
     "verify:dynamic-prompt-values": "node scripts/verify-dynamic-prompt-values.js",

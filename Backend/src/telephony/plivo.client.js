@@ -62,6 +62,19 @@ export function getPlivoCallDetails(authId, authToken, callUuid, fetchImpl = fet
     { method: 'GET' }, fetchImpl, baseUrl, 'get-call-details');
 }
 
+export function transferPlivoCall(authId, authToken, callUuid, url, fetchImpl = fetch) {
+  return plivoRequest(authId, authToken,
+    `/Account/${encodeURIComponent(authId)}/Call/${encodeURIComponent(callUuid)}/`,
+    { method: 'POST', body: JSON.stringify({ legs: 'aleg', aleg_url: url, aleg_method: 'POST' }) },
+    fetchImpl, env.PLIVO_API_BASE_URL, 'transfer-call');
+}
+
+export function stopPlivoCallStreams(authId, authToken, callUuid, fetchImpl = fetch) {
+  return plivoRequest(authId, authToken,
+    `/Account/${encodeURIComponent(authId)}/Call/${encodeURIComponent(callUuid)}/Stream/`,
+    { method: 'DELETE' }, fetchImpl, env.PLIVO_API_BASE_URL, 'stop-call-streams');
+}
+
 export function createPlivoSubaccount(authId, authToken, name, fetchImpl = fetch, baseUrl = env.PLIVO_API_BASE_URL) {
   return plivoRequest(authId, authToken, `/Account/${encodeURIComponent(authId)}/Subaccount/`, {
     method: 'POST', body: JSON.stringify({ name, enabled: true }),

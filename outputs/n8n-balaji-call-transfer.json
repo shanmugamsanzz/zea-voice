@@ -1,0 +1,251 @@
+{
+  "name": "Balaji - Transfer Tool and Plivo Dial",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "balajitransfer_to_ward",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "tool-webhook",
+      "name": "Tool Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "balaji-transfer-tool"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.plivo.com/v1/Account/SAMDNIYJI3NDITODY4MS/Call/' + encodeURIComponent($('Tool Webhook').item.json.body.callContext.providerCallId.trim()) + '/' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"legs\": \"aleg\", \"aleg_url\": \"https://n8n.urlfactory.website/webhook/balaji-ward-dial\", \"aleg_method\": \"POST\"}",
+        "options": {
+          "timeout": 2000
+        }
+      },
+      "id": "plivo-transfer",
+      "name": "Request Plivo Transfer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        260,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: !$json.error && Number($json.statusCode) >= 200 && Number($json.statusCode) < 300, transferRequested: true, streamStopped: !$json.error && Number($json.statusCode) >= 200 && Number($json.statusCode) < 300, connected: false, retryTransfer: false, message: !$json.error && Number($json.statusCode) >= 200 && Number($json.statusCode) < 300 ? 'Transfer accepted and AI stream stop completed. Staff connection is not yet confirmed.' : 'Transfer was accepted, but AI stream stop could not be confirmed. Do not repeat the transfer or claim staff connection.' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "tool-response",
+      "name": "Respond to Backend JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1000,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "balaji-ward-dial",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "dial-webhook",
+      "name": "Plivo Dial Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        380
+      ],
+      "webhookId": "balaji-transfer-dial"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<Response>\n  <Dial>\n    <Number>+918838440986</Number>\n  </Dial>\n</Response>",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/xml"
+              }
+            ]
+          }
+        }
+      },
+      "id": "dial-response",
+      "name": "Respond to Plivo XML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        260,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "accepted",
+              "leftValue": "={{ !$json.error && ['transfer executed', 'call transferred'].includes($json.message) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "transfer-accepted",
+      "name": "Transfer Accepted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'https://api.plivo.com/v1/Account/SAMDNIYJI3NDITODY4MS/Call/' + encodeURIComponent($('Tool Webhook').item.json.body.callContext.providerCallId.trim()) + '/Stream/' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "timeout": 2000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "stop-ai-stream",
+      "name": "Stop AI Stream",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        740,
+        -80
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": false, \"transferRequested\": null, \"streamStopped\": false, \"connected\": false, \"retryTransfer\": false, \"message\": \"Transfer was not confirmed. AI stream was not stopped. Check Plivo before retrying.\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "transfer-failure-response",
+      "name": "Respond Transfer Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        740,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Tool Webhook": {
+      "main": [
+        [
+          {
+            "node": "Request Plivo Transfer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Plivo Transfer": {
+      "main": [
+        [
+          {
+            "node": "Transfer Accepted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plivo Dial Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond to Plivo XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transfer Accepted?": {
+      "main": [
+        [
+          {
+            "node": "Stop AI Stream",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Transfer Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop AI Stream": {
+      "main": [
+        [
+          {
+            "node": "Respond to Backend JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

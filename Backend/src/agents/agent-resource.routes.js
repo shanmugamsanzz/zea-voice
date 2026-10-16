@@ -5,8 +5,21 @@ import { requireSessionAuthentication } from '../auth/auth.middleware.js';
 import { browserTestSessionParamsSchema, createBrowserTestSessionSchema, createBrowserTestShareLinkSchema } from './agent-resource.schemas.js';
 import { createBrowserTestSession, endBrowserTestSession } from '../voice/browser-test-session.service.js';
 import { createBrowserTestShareLink } from '../voice/browser-test-share-link.service.js';
+import { getCallTransferSettings, saveCallTransferSettings, deleteCallTransferSettings } from './agent-call-transfer.service.js';
 function valid(s,v){const p=parseAgentResourceInput(s,v);if(!p.success)throw new AppError(400,'Request validation failed','VALIDATION_ERROR',p.issues);return p.data;}function auth(r){return{...r.auth,tenantId:r.tenant.tenantId,workspaceId:r.tenant.workspaceId};}const write=requireRoles('SUPER_ADMIN','COMPANY_DEVELOPER');
 export const agentResourceRouter=Router({mergeParams:true});
+agentResourceRouter.get('/call-transfer-settings',write,requireSessionAuthentication,async(r,s)=>{
+  const {agentId}=valid(resourceAgentIdSchema,r.params);
+  s.json({success:true,data:await getCallTransferSettings(auth(r),agentId)});
+});
+agentResourceRouter.put('/call-transfer-settings',write,requireSessionAuthentication,async(r,s)=>{
+  const {agentId}=valid(resourceAgentIdSchema,r.params);
+  s.json({success:true,data:await saveCallTransferSettings(auth(r),agentId,r.body)});
+});
+agentResourceRouter.delete('/call-transfer-settings',write,requireSessionAuthentication,async(r,s)=>{
+  const {agentId}=valid(resourceAgentIdSchema,r.params);
+  s.json({success:true,data:await deleteCallTransferSettings(auth(r),agentId)});
+});
 agentResourceRouter.use('/knowledge-documents',agentQdrantDocumentRouter);
 agentResourceRouter.use('/live-data',agentLiveDataRouter);
 agentResourceRouter.post('/browser-test-sessions',write,requireSessionAuthentication,async(r,s)=>{const{agentId}=valid(browserTestSessionParamsSchema,r.params);const data=await createBrowserTestSession(auth(r),agentId,valid(createBrowserTestSessionSchema,r.body??{}));s.status(201).json({success:true,data});});

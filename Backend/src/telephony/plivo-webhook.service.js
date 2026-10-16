@@ -7,6 +7,7 @@ import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { finishAttempt, markAttemptRinging } from '../campaigns/campaign-execution.service.js';
 import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
+import { notifyVerifiedTransferHangup } from '../voice/transfer-runtime-registry.js';
 
 function compareValues(left, right) {
   if (left < right) return -1;
@@ -62,7 +63,7 @@ export function validatePlivoAccountSignatures(input) {
 
 async function attemptAccount(attemptId) {
   return withPlatformAdminContext(null, async (client) => {
-    const result = await client.query(`SELECT p.auth_token_encrypted, p.hangup_url,
+    const result = await client.query(`SELECT p.auth_token_encrypted, p.hangup_url,p.tenant_id,
         COALESCE(parent.auth_token_encrypted,p.auth_token_encrypted) AS main_auth_token_encrypted
       FROM campaign_task_attempts a
       JOIN campaign_tasks t ON t.id=a.task_id JOIN phone_numbers n ON n.id=t.phone_number_id
@@ -167,6 +168,7 @@ export async function processPlivoCallback(input) {
       durationSeconds: Number(input.payload.BillDuration ?? input.payload.Duration ?? 0),
       payload: input.payload,
     });
+    await notifyVerifiedTransferHangup(providerCallId, account.tenant_id);
     return { duplicate: false, status: finalOutcome, result };
   } catch (error) {
     await withPlatformAdminContext(null, (client) => client.query(
@@ -233,5 +235,6 @@ export async function processInboundPlivoHangup(input) {
     return { duplicate: false, callId: call.id, tenantId: call.tenant_id, status };
   });
   await voiceCallOwnership.releaseValidated({ tenantId: result.tenantId, providerCallId }).catch(() => {});
+  await notifyVerifiedTransferHangup(providerCallId, result.tenantId);
   return result;
 }

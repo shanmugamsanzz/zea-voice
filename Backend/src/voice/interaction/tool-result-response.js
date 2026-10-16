@@ -46,6 +46,10 @@ export async function runToolResultResponse({
         'Give one natural spoken answer using the tool result. Do not call another tool.',
         'Use the supplied conversation context to retain the ongoing goal and details already provided. A completed tool action may be only one step in that goal. Follow the agent prompt for the next missing step; do not restart intake, repeat answered questions, or treat a partial action as completion of the entire request.',
         'Do not claim success, availability, sending, booking, or any fact that is not present in the tool result.',
+        ...(toolResult?.transferFollowUp?.verified === true ? [
+          'This is the configured staff callback action following a failed transfer. The backend verification below overrides any raw provider success field. Promise a callback only if accepted=true AND saved=true with a requestId. Otherwise explain that the callback could not be confirmed and continue helping. Never claim staff were notified unless staffNotified=true. Do not resubmit an already saved request or promise an exact contact time.',
+          '<verified_transfer_callback>', JSON.stringify(toolResult.transferFollowUp), '</verified_transfer_callback>',
+        ] : []),
         'Choose callControl using the configured agent prompt and the actual tool result: continue to keep the conversation open, or close to end after your speech finishes playing. A closing sentence alone does not end the call. Do not invent a successful action to justify closing.',
         `Caller language: ${cleanText(language, 80) || 'Follow the caller language'}`,
         '<conversation_context>', JSON.stringify(serializable(conversationContext)), '</conversation_context>',

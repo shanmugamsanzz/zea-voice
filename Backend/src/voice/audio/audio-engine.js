@@ -167,6 +167,12 @@ export class ProviderIndependentAudioEngine {
     return this;
   }
 
+  async pauseForTransfer() {
+    this.cancelStaleAudio('call_transfer');
+    this.inputQueue.clear();
+    await this.pacer.stop();
+  }
+
   async enqueueInbound(chunk, metadata = {}) {
     const converted = this.inboundConverter.push(chunk);
     if (!converted.length) return;

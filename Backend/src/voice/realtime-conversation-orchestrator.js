@@ -5,6 +5,10 @@ import { AppError } from '../middleware/errors.js';
 import { updateContactTool, contactNameInstructions } from './tools/update-contact.service.js';
 import { isConversationContinuityEnabled } from '../calls/conversation-feature.js';
 import { manageFollowUpTool, followUpInstructions } from './tools/manage-follow-up.service.js';
+import { callTransferTool } from './tools/call-transfer-tool.js';
+import { callTransferService } from './call-transfer.service.js';
+import { transferRuntimes } from './transfer-runtime-registry.js';
+import { TransferFollowUp } from './transfer-follow-up.js';
 import { hasDynamicPromptValues, loadDynamicPromptValues, buildDynamicPromptValues,
   renderDynamicPrompt } from './dynamic-prompt-values.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
@@ -337,6 +341,7 @@ export class RealtimeConversationOrchestrator {
       version: 1, mode: 'active', turns: 0, searches: 0, workflows: 0,
     };
     this.templateEngineState = createMinimalTemplateEngineState();
+    this.transferFollowUp = new TransferFollowUp();
     this.pendingTemplateEngineRequest = null;
     this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
@@ -357,11 +362,11 @@ export class RealtimeConversationOrchestrator {
     bind('start', () => void this.#guard('start', () => this.#onStart()));
     bind('media', ({ audio }) => void this.#guard('media', () => this.#onMedia(audio)));
     bind('dtmf', ({ digit }) => void this.#guard('dtmf', () => this.#onDtmf(digit)));
-    bind('stop', () => void this.#finalize('completed', `${transport}_stream_stopped`));
+    bind('stop', () => { if (!this.mediaSession.transferPending) void this.#finalize('completed', `${transport}_stream_stopped`); });
     bind('failure', ({ error }) => void this.#recover(error, `${transport}_media`));
-    bind('closed', ({ code, reason }) => void this.#finalize(
+    bind('closed', ({ code, reason }) => { if (!this.mediaSession.transferPending) void this.#finalize(
       code === 1000 ? 'completed' : 'failed', reason || 'media_closed',
-    ));
+    ); });
   }
 
   #browserDiagnostic(type, details = {}) {
@@ -390,6 +395,28 @@ export class RealtimeConversationOrchestrator {
       workspaceId: this.call.workspaceId,
       callDirection: this.call.direction,
     });
+    this.transferService = this.dependencies.callTransferService ?? callTransferService;
+    const transferNameConflict = templateEngineToolSchemas(this.runtimeProfile.tools ?? [])
+      .some(tool => tool.name === callTransferTool.name);
+    if (this.mediaSession.transport !== 'browser_test' && !transferNameConflict && await this.transferService.available(this.call)) {
+      this.runtimeProfile = { ...this.runtimeProfile, tools: [...(this.runtimeProfile.tools ?? []), callTransferTool] };
+      this.transferRuntime = { call: this.call, orchestrator: this,
+        streamActive: () => !this.mediaSession.closed,
+        pause: () => this.#pauseTransfer(), detach: () => this.#detachTransfer(),
+        restore: async result => {
+          try { return await this.#restoreTransfer(result); }
+          catch (error) { this.transferPaused = false; return this.#recover(error, 'transfer_resume'); }
+        },
+        bridged: async () => {
+          await Promise.allSettled(Object.values(this.adapters ?? {}).map(adapter => adapter.close?.()));
+        },
+        hangup: async () => {
+          await this.transferService.callerHangup(this.call.providerCallId);
+          await this.#finalize('completed', 'telephone_hangup_after_transfer');
+        },
+      };
+      this.transferService.register(this.transferRuntime);
+    }
     const directional=selectDirectionalInstructions(this.runtimeProfile.agent,this.call.direction);
     this.runtimeProfile={...this.runtimeProfile,agent:{...this.runtimeProfile.agent,...directional,callDirection:this.call.direction},
       configuration:this.runtimeProfile.configuration ? Object.freeze({...this.runtimeProfile.configuration,
@@ -1023,9 +1050,92 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
+  async #pauseTransfer() {
+    if (this.finalized || this.transferPaused) return;
+    // Set this before any awaited cancellation: Plivo can close the stream immediately.
+    this.transferPaused = true;
+    this.mediaSession.transferPending = true;
+    this.callerTurnWait.cancel();
+    this.customerUtterance.reset();
+    this.shortTurnMerger.clear();
+    this.interruptionCandidate?.reset();
+    this.#clearInactivity();
+    this.#clearCallDuration();
+    await this.#cancelActive('call_transfer');
+    await this.audioEngine.pauseForTransfer();
+    await this.adapters.stt.cancel('call_transfer');
+    await this.transcriptPersistence?.flush?.();
+  }
+
+  async #detachTransfer() {
+    if (this.mediaSession.closed) return;
+    await new Promise(resolve => {
+      const session = this.mediaSession;
+      const timer = setTimeout(() => { session.socket?.terminate?.(); resolve(); }, 2000);
+      const done = () => { clearTimeout(timer); resolve(); };
+      session.once('closed', done);
+      session.close(1000, 'native_call_transfer');
+    });
+  }
+
+  resumeTransferSession(mediaSession) {
+    if (!this.transferPaused || !this.transferRuntime?.resumeResult || this.finalized
+      || mediaSession.call.tenantId !== this.call.tenantId
+      || mediaSession.providerCallId !== this.call.providerCallId) {
+      throw new AppError(409, 'Transfer cannot resume this call', 'TRANSFER_RESUME_INVALID');
+    }
+    for (const [event, handler] of this.listeners) this.mediaSession.off(event, handler);
+    this.listeners = [];
+    this.mediaSession = mediaSession;
+    this.audioEngine.mediaSession = mediaSession;
+    this.transferResumeStart = true;
+    this.#attach();
+    return this;
+  }
+
+  async #restoreTransfer(result) {
+    if (this.finalized) return;
+    this.transferFollowUp.setOutcome(result);
+    this.runtimeMetrics.transferFollowUp = this.transferFollowUp.outcome;
+    // Never reopen with a new greeting. Controller, intake, memory and usage stay intact.
+    if (this.mediaSession.closed) throw new AppError(409, 'Transfer media is not connected', 'TRANSFER_RESUME_MEDIA_MISSING');
+    this.mediaSession.transferPending = false;
+    await this.adapters.stt.connect();
+    this.audioEngine.start();
+    this.transferPaused = false;
+    this.#armCallDuration(true);
+    const epoch = this.epoch;
+    await this.controller.beginSystemResponse('call_transfer_result');
+    const response = await this.#generateUtilitySpeech(
+      `SYSTEM CALL EVENT (verified backend data): ${JSON.stringify(result)}. The staff transfer did not connect.
+      ${this.transferFollowUp.promptContext(this.runtimeProfile.tools)}
+      Continue this existing conversation in the configured language. Briefly explain the actual result and ask if further help is needed.
+      Do not greet or restart intake. Do not say a callback was saved, staff were notified, or staff will call unless a separate verified workflow already confirms it.
+      Preserve the caller's known details and pending request. Memory: ${JSON.stringify(this.liveCallMemory?.snapshot?.() ?? {})}`,
+      this.liveCallMemory?.promptMessages?.() ?? this.controller.history, { fullHistory: true },
+    );
+    if (this.finalized || this.transferPaused || epoch !== this.epoch) return;
+    const message = this.#fitTtsMessage(response.text);
+    if (!message) throw new AppError(502, 'No transfer recovery speech generated', 'TRANSFER_RECOVERY_EMPTY');
+    await this.controller.setAssistantResponse(message, Date.now(), { sources: response.sources });
+    await this.#synthesize(message, `transfer-result-${epoch}`, { epoch });
+    if (epoch !== this.epoch || this.finalized) return;
+    if (this.controller.state === callStates.SPEAKING) await this.controller.playbackComplete();
+    this.#armInactivity();
+  }
+
   async #onStart() {
     await this.ready;
     if (this.finalized) return;
+    if (this.transferResumeStart) {
+      this.transferResumeStart = false;
+      await this.transferService.resumed(this.call.id);
+      try { return await this.#restoreTransfer(this.transferRuntime.resumeResult); }
+      catch (error) {
+        this.transferPaused = false;
+        return this.#recover(error, 'transfer_resume');
+      }
+    }
     this.audioEngine.start();
     this.log.info({
       stage: 'ambience.lifecycle_started', callId: this.call.id,
@@ -1123,13 +1233,14 @@ export class RealtimeConversationOrchestrator {
 
   async #onMedia(audio) {
     await this.ready;
-    if (!this.finalized) await this.audioEngine.enqueueInbound(audio, { callId: this.call.id });
+    if (!this.finalized && !this.transferPaused) await this.audioEngine.enqueueInbound(audio, { callId: this.call.id });
   }
 
   async #pumpInbound() {
     while (!this.finalized) {
       const frame = await this.audioEngine.readInbound();
       if (!frame) return;
+      if (this.transferPaused) continue;
       try {
         this.adapters.stt.sendAudio(frame.data);
       } catch (error) {
@@ -1150,6 +1261,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #handleSttEvent(event) {
+    if (this.transferPaused && event.type !== 'usage') return;
     const finalEventReceivedAt = event.type === 'final_transcript' ? Date.now() : null;
     const eventPolicy = sttEventPolicy(event.type);
     if (this.finalized) return;
@@ -1630,7 +1742,7 @@ export class RealtimeConversationOrchestrator {
     let completion = {};
     const messages = [
       { role: 'system', content: this.runtimeProfile.agent.prompt },
-      ...(Array.isArray(history) ? history.slice(-6) : []),
+      ...(Array.isArray(history) ? history.slice(options.fullHistory ? -env.LLM_MAX_HISTORY_MESSAGES : -6) : []),
       { role: 'user', content: instruction },
     ];
     for await (const event of this.adapters.llm.stream({
@@ -2292,7 +2404,7 @@ export class RealtimeConversationOrchestrator {
         turnBoundaryId: `${this.call.id}:${epoch}`,
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
-        mainPrompt: (this.runtimeProfile.tools.some(tool=>tool.id===manageFollowUpTool.id)?`${followUpInstructions}\n`:'')+(this.runtimeProfile.tools.some(tool=>tool.id===updateContactTool.id)
+        mainPrompt: (this.transferFollowUp.outcome ? this.transferFollowUp.promptContext(this.runtimeProfile.tools) + '\n' : '') + (this.runtimeProfile.tools.some(tool=>tool.id===manageFollowUpTool.id)?`${followUpInstructions}\n`:'')+(this.runtimeProfile.tools.some(tool=>tool.id===updateContactTool.id)
           ? `${contactNameInstructions}\n${this.savedCallerName ? `Latest caller-supplied contact name: ${JSON.stringify(this.savedCallerName)}. This supersedes older contact names and does not verify identity.\n` : ''}${this.runtimeProfile.agent.prompt}` : this.runtimeProfile.agent.prompt),
         maximumSpeechCharacters:
           Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse) > 0
@@ -2353,31 +2465,38 @@ export class RealtimeConversationOrchestrator {
           ...this.templateEngineState, ...state,
         }; },
         executeAuthorizedTool: async (toolCall) => {
-          const results = await (this.dependencies.executeTools ?? executeAgentTools)(
-            this.runtimeProfile,
-            this.call,
-            [{
-              id: `template-${epoch}`,
-              name: toolCall.name,
-              arguments: toolCall.arguments,
-              intent: toolCall.intent,
-              currentUserMessage: toolCall.currentUserMessage,
-              conversation: toolCall.conversation,
-              collectedDetails: toolCall.collectedDetails,
-              authorizationRecordId: toolCall.authorizationRecordId,
-            }],
-            {
-              fetchImpl: this.dependencies.fetchImpl,
-              timeoutMs: env.VOICE_TOOL_TIMEOUT_MS,
-              requireWorkflowAuthorization: true,
-              workflowAuthorization: {
-                recordId: toolCall.authorizationRecordId,
-                toolName: toolCall.name,
+          const verified = await this.transferFollowUp.execute(toolCall.authorizationRecordId, async () => {
+            const results = await (this.dependencies.executeTools ?? executeAgentTools)(
+              this.runtimeProfile,
+              this.call,
+              [{
+                id: `template-${epoch}`,
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+                intent: toolCall.intent,
+                currentUserMessage: toolCall.currentUserMessage,
+                conversation: toolCall.conversation,
+                collectedDetails: toolCall.collectedDetails,
+                authorizationRecordId: toolCall.authorizationRecordId,
+              }],
+              {
+                fetchImpl: this.dependencies.fetchImpl,
+                timeoutMs: env.VOICE_TOOL_TIMEOUT_MS,
+                requireWorkflowAuthorization: true,
+                callTransferService: this.transferService,
+              verifiedTransferCallback: this.transferFollowUp.outcome?.callbackToolId === toolCall.authorizationRecordId
+                ? { callId: this.call.id, toolId: toolCall.authorizationRecordId } : null,
+                workflowAuthorization: {
+                  recordId: toolCall.authorizationRecordId,
+                  toolName: toolCall.name,
+                },
               },
-            },
-          );
-          this.#traceTurn(epoch, 'tool_result', { toolName: toolCall.name, results });
-          const verified = results[0];
+            );
+            this.#traceTurn(epoch, 'tool_result', { toolName: toolCall.name, results });
+            return results[0];
+          });
+          this.runtimeMetrics.transferFollowUp = this.transferFollowUp.outcome;
+          if (verified.transferFollowUp) this.#traceTurn(epoch, 'transfer_callback_verified', verified.transferFollowUp);
           if (toolCall.name==='update_contact' && verified.toolId===updateContactTool.id
             && verified.success && verified.output?.saved===true) {
             this.savedCallerName=verified.output.name;
@@ -3256,6 +3375,7 @@ export class RealtimeConversationOrchestrator {
 
   async #onDtmf(digit) {
     await this.ready;
+    if (this.transferPaused) return;
     if (digit === '#') await this.#close('caller_pressed_hash');
   }
 
@@ -3328,25 +3448,26 @@ export class RealtimeConversationOrchestrator {
     this.callDurationTimer = null;
   }
 
-  #armCallDuration() {
+  #armCallDuration(preserveElapsed = false) {
     this.#clearCallDuration();
     const minutes = Number(this.runtimeProfile.limits?.maxCallDurationMinutes ?? 0);
     const durationMs = configuredCallDurationMs(minutes);
     if (durationMs === null) return;
     const setTimer = this.dependencies.setCallDurationTimer ?? setTimeout;
     this.callDurationTimer = setTimer(() => void this.#guard('maximum_call_duration', async () => {
-      if (this.finalized) return;
+      if (this.finalized || this.transferPaused) return;
       this.runtimeMetrics.ttsLimits.durationLimitReached = true;
       this.log.info({
         stage: 'call.maximum_duration_reached', callId: this.call.id, maximumCallDurationMinutes: minutes,
       }, 'Maximum configured call duration reached');
       await this.#close('maximum_duration_reached');
-    }), durationMs);
+    }), preserveElapsed ? Math.max(1, durationMs - (Date.now() - this.mediaStartedAt)) : durationMs);
     this.callDurationTimer?.unref?.();
   }
 
   #armInactivity() {
     this.#clearInactivity();
+    if (this.transferPaused) return;
     if (this.activeGroundedTurnEpochs.size > 0) return;
     if (this.finalized || this.controller.state !== callStates.LISTENING) return;
     const seconds = Number(this.runtimeProfile.agent.inactivityTimeoutSeconds ?? 0);
@@ -3360,7 +3481,7 @@ export class RealtimeConversationOrchestrator {
     // turn clears it. Re-check the active turn at callback time so silence
     // prompts cannot interrupt retrieval, LLM, validation or final TTS.
     if (this.activeGroundedTurnEpochs.size > 0
-      || this.finalized || this.controller.state !== callStates.LISTENING) return;
+      || this.transferPaused || this.finalized || this.controller.state !== callStates.LISTENING) return;
     const action = await this.controller.handleSilence();
     if (action.action === 'close') return this.#close(action.reason);
     if (action.action !== 'inactivity_response') return;
@@ -3390,7 +3511,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #recover(error, stage) {
-    if (this.finalized) return;
+    if (this.finalized || this.transferPaused) return;
     this.#browserDiagnostic('error', {
       stage,
       code: error?.code ?? null,
@@ -3500,6 +3621,7 @@ export class RealtimeConversationOrchestrator {
 
   async #finalize(outcome, reason) {
     if (this.finalized) return;
+    if (this.transferRuntime) this.transferService.unregister(this.call.id);
     const callbackNeedsManualFollowUp = this.call.direction === 'outbound'
       && this.currentCallbackRequest?.detected === true
       && this.currentCallbackRequest?.resolved === false
@@ -3700,5 +3822,7 @@ export class RealtimeConversationOrchestrator {
 }
 
 export function attachRealtimeConversationOrchestrator(mediaSession, dependencies = {}) {
+  const retained = transferRuntimes.get(mediaSession.call.id);
+  if (retained) return retained.orchestrator.resumeTransferSession(mediaSession);
   return new RealtimeConversationOrchestrator(mediaSession, dependencies);
 }

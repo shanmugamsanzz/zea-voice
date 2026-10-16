@@ -3,6 +3,8 @@ import { logger } from '../../config/logger.js';
 import { AppError } from '../../middleware/errors.js';
 import { updateContactTool, updateCallerContact } from './update-contact.service.js';
 import { manageFollowUpTool } from './manage-follow-up.service.js';
+import { callTransferTool } from './call-transfer-tool.js';
+import { callTransferService } from '../call-transfer.service.js';
 import { manageLiveFollowUp } from '../../calls/follow-up.service.js';
 import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { validateToolArguments, validateToolHeaders, validateWebhookEndpoint } from './tool-security.js';
@@ -110,6 +112,16 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
   }
   const tool = (runtimeProfile.tools ?? []).find((candidate) => safeName(candidate.name) === safeName(toolCall.name));
   if (!tool) throw new AppError(409, `Requested tool is not assigned to this agent: ${toolCall.name}`, 'VOICE_TOOL_NOT_ASSIGNED');
+  if (tool.id === callTransferTool.id && tool.type === callTransferTool.type) {
+    if (!workflowAuthorized || dependencies.requireWorkflowAuthorization !== true
+      || executionAuthorization.recordId !== callTransferTool.id) {
+      throw new AppError(403, 'Transfer requires workflow authorization', 'TRANSFER_NOT_AUTHORIZED');
+    }
+    validateToolArguments(toolCall.arguments ?? {}, callTransferTool.configuration.inputSchema);
+    const output = await (dependencies.callTransferService ?? callTransferService).request(call);
+    return { id: toolCall.id ?? null, toolId: tool.id, name: tool.name,
+      success: output.success === true, verified: true, output, durationMs: performance.now() - startedAt };
+  }
   if(tool.id===manageFollowUpTool.id&&tool.type===manageFollowUpTool.type){
     if(!workflowAuthorized || dependencies.requireWorkflowAuthorization!==true || executionAuthorization.recordId!==manageFollowUpTool.id)
       throw new AppError(403,'Follow-up action requires workflow authorization','FOLLOW_UP_NOT_AUTHORIZED');
@@ -133,6 +145,13 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       durationMs:Math.round((performance.now()-startedAt)*100)/100};
   }
   const config = await configuration(tool, dependencies);
+  const isTransferCallback = dependencies.verifiedTransferCallback?.callId === call.id
+    && dependencies.verifiedTransferCallback?.toolId === tool.id && workflowAuthorized;
+  const callerPhone = isTransferCallback && call.direction === 'outbound'
+    ? call.toNumber ?? call.to : call.fromNumber ?? call.from;
+  if (isTransferCallback && !/^\+[1-9]\d{6,14}$/.test(callerPhone ?? '')) {
+    throw new AppError(409, 'The callback caller phone is unavailable', 'TRANSFER_CALLBACK_PHONE_MISSING');
+  }
   const argumentsValue = validateToolArguments(toolCall.arguments ?? {}, config.inputSchema);
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const timeoutMs = dependencies.timeoutMs ?? config.timeoutMs;
@@ -145,8 +164,8 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
-        mobileNumber: call.fromNumber ?? call.from ?? null,
-        callerPhoneNumber: call.fromNumber ?? call.from ?? null,
+        mobileNumber: callerPhone ?? null,
+        callerPhoneNumber: callerPhone ?? null,
         intent: cleanText(toolCall?.intent, 2_000) || null,
         currentUserMessage: cleanText(toolCall?.currentUserMessage ?? toolCall?.intent, 2_000) || null,
         conversationSummary: compactConversationSummary(toolCall?.conversation),

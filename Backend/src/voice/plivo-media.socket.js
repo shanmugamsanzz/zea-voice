@@ -325,6 +325,8 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
         clearInterval(heartbeatTimer);
         sessions.delete(closedSession);
         sessionStore.deleteIf(closedSession.callId, closedSession);
+        // Native handoff retains the call lease while Dial owns the telephone leg.
+        if (closedSession.transferPending) return;
         void ownership.release({
           tenantId: closedSession.call.tenantId,
           providerCallId: closedSession.providerCallId,
