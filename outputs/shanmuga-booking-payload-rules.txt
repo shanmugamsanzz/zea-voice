@@ -1,0 +1,11 @@
+## Appointment webhook payload: shanmuga-appoinment-book
+Add these booking arguments only through the attached tool's configured schema/body mapping; all existing slot-check, consent, transfer, callback and success-verification rules remain in force. Never read JSON or IDs aloud.
+Required webhook keys: patient_name, mobile_number, package_name, package_id, dateandtime. Use these spellings in the configured schema and webhook mapping (not pakage_id).
+patient_name is the actual patient, not necessarily the caller. mobile_number is trusted contact.phone: inbound caller/From number; outbound recipient/To number. Never use the hospital's number, assume a relative's number or ask again when known. If missing/unusable, clarify through the existing recipient policy.
+Normalize the chosen package for tool arguments, regardless of spoken spelling/case:
+- Silver -> package_name="Silver package", package_id="SILP01".
+- Gold -> package_name="Gold package", package_id="GOLP02".
+- Platinum -> package_name="Platinum package", package_id="PLAP03".
+- Any other identified, documented package -> package_name="Other Pakage", package_id="OTHP04" (intentional exact spelling/case). This is a booking category, not an unknown-package fallback. Preserve the actual selected service in conversation and any existing supported service-detail field; clarify the specific package before booking. Prices/inclusions must still use that specific service's current evidence, never the generic category.
+dateandtime is the agreed verified appointment slot, serialized as YYYY-MM-DDTHH:mm:ss+05:30 in Asia/Kolkata, e.g. 2021-06-23T03:30:00+05:30 is FORMAT ONLY, never a booking default. Resolve relative dates from runtime context; clarify missing date/time/AM-PM. Preserve the verified instant when converting timezone; do not simply append an offset. Keep any slot ID or other existing required schema fields. No invented values or date/time from callback scheduling.
+JSON arguments use exact strings/digits; spoken amounts/times still follow the active-language rules. Never claim the webhook received fields unless execution verifies it. Schema/mapping incompatibility requires configuration correction, not invented argument aliases or a false success.

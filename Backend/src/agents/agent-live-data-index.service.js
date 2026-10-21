@@ -7,6 +7,7 @@ import {
 } from '../rag/qdrant.client.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
+import { LIVE_DATA_EMBEDDING_BATCH_SIZE } from './agent-live-data-limits.js';
 
 function pointUuid(value) {
   const hex = createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
@@ -50,19 +51,31 @@ function verifiedVector(vector) {
 }
 
 /** Replaces Qdrant points for exactly one agent table from its committed PostgreSQL snapshot. */
-export async function syncAgentLiveDataTable(auth, agentId, tableId) {
+export async function syncAgentLiveDataTable(auth, agentId, tableId, dependencies = {}) {
+  const load = dependencies.snapshot ?? snapshot;
+  const ensure = dependencies.ensureTenantCollection ?? ensureTenantCollection;
+  const remove = dependencies.deleteTablePoints ?? deleteTenantAgentLiveDataTablePoints;
+  const embed = dependencies.embedTexts ?? embedTexts;
+  const upsert = dependencies.upsertTenantPoints ?? upsertTenantPoints;
   const tenantId = requireTenantId(auth?.tenantId);
   const resolvedAgentId = requireEntityId(agentId, 'agentId');
   const resolvedTableId = requireEntityId(tableId, 'tableId');
-  const data = await snapshot(auth, resolvedAgentId, resolvedTableId);
-  await ensureTenantCollection(tenantId);
-  await deleteTenantAgentLiveDataTablePoints(tenantId, resolvedAgentId, resolvedTableId);
-  if (!data?.rows.length || !data.columns.length) return { status: 'synced', indexedRows: 0 };
+  const data = await load(auth, resolvedAgentId, resolvedTableId);
+  if (!data?.rows.length || !data.columns.length) {
+    await ensure(tenantId);
+    await remove(tenantId, resolvedAgentId, resolvedTableId);
+    return { status: 'synced', indexedRows: 0 };
+  }
 
   const texts = data.rows.map((row) => rowText(data.table.name, data.columns, row.row_values));
-  const vectors = await embedTexts(texts, { kind: 'passage' });
-  if (!Array.isArray(vectors) || vectors.length !== data.rows.length) {
-    throw new Error('Live Data embedding provider returned an unexpected vector count');
+  const vectors = [];
+  for (let offset = 0; offset < texts.length; offset += LIVE_DATA_EMBEDDING_BATCH_SIZE) {
+    const batch = texts.slice(offset, offset + LIVE_DATA_EMBEDDING_BATCH_SIZE);
+    const result = await embed(batch, { kind: 'passage' });
+    if (!Array.isArray(result) || result.length !== batch.length) {
+      throw new Error('Live Data embedding provider returned an unexpected vector count');
+    }
+    vectors.push(...result.map(verifiedVector));
   }
   const now = new Date().toISOString();
   const points = data.rows.map((row, index) => ({
@@ -80,7 +93,10 @@ export async function syncAgentLiveDataTable(auth, agentId, tableId) {
       uploaded_at: now,
     },
   }));
-  await upsertTenantPoints(tenantId, points);
+  // Keep the working index intact if any embedding batch fails.
+  await ensure(tenantId);
+  await remove(tenantId, resolvedAgentId, resolvedTableId);
+  await upsert(tenantId, points);
   return { status: 'synced', indexedRows: points.length };
 }
 

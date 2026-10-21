@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LIVE_DATA_MAXIMUM_ROWS } from './agent-live-data-limits.js';
 
 const tableName = z.string().trim().min(1).max(160);
 const columnName = z.string().trim().min(1).max(160);
@@ -28,7 +29,7 @@ export const replaceLiveDataGridSchema = z.object({
     name: columnName,
     dataType: z.enum(['text', 'number', 'date', 'boolean']).default('text'),
   }).strict()).max(100),
-  rows: z.array(z.array(gridCell).max(100)).max(1_000),
+  rows: z.array(z.array(gridCell).max(100)).max(LIVE_DATA_MAXIMUM_ROWS, 'Live Data tables support at most 50 data rows. No rows were saved.'),
 }).strict();
 
 export function parseLiveDataInput(schema, input) {

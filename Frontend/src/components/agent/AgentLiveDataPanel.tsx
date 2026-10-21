@@ -10,6 +10,7 @@ type GridColumn = { id: string; name: string; dataType: ColumnType };
 
 const INITIAL_COLUMNS = 10;
 const INITIAL_ROWS = 10;
+const MAXIMUM_DATA_ROWS = 50;
 const emptyGrid = (rows = INITIAL_ROWS, columns = INITIAL_COLUMNS) => Array.from({ length: rows }, () => Array.from({ length: columns }, () => ''));
 const columnLabel = (index: number) => {
   let value = index + 1; let label = '';
@@ -162,6 +163,10 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
       if (column.dataType === 'boolean') return value.toLocaleLowerCase() === 'true';
       return value;
     })).filter((row) => row.some((value) => value !== null));
+    if (sheetRows.length > MAXIMUM_DATA_ROWS) {
+      setError('Live Data tables support at most 50 data rows, excluding the header. No changes were saved. Reduce the rows before saving.');
+      return;
+    }
     if (selected.columns.length || selected.rows.length) {
       if (!window.confirm('Save all spreadsheet changes? Removed columns or rows will be deleted.')) return;
     }
@@ -175,7 +180,7 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
   const gridRows = useMemo(() => cells.length, [cells.length]);
 
   return <div className="space-y-4">
-    <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="flex items-center gap-2 text-sm font-black text-slate-900"><Database className="h-4 w-4 text-emerald-600" />Live Data</h3><p className="mt-1 text-xs text-slate-500">Use this exactly like a spreadsheet. First row is the column names; rows below are the live data.</p></div><button type="button" onClick={() => void load()} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button></div>
+    <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="flex items-center gap-2 text-sm font-black text-slate-900"><Database className="h-4 w-4 text-emerald-600" />Live Data</h3><p className="mt-1 text-xs text-slate-500">Use this exactly like a spreadsheet. First row is the column names; rows below are the live data. Maximum 50 data rows per table.</p></div><button type="button" onClick={() => void load()} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button></div>
     {error && <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}{notice && <div className="flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700"><CheckCircle2 className="h-4 w-4 shrink-0" />{notice}</div>}
     <div className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><input value={newName} onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void createSheet(); }} placeholder="New spreadsheet name" className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold outline-none focus:border-emerald-500" /><button type="button" onClick={() => void createSheet()} disabled={saving || !newName.trim()} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Plus className="h-4 w-4" />New sheet</button></div>
     {loading ? <div className="h-64 animate-pulse rounded-xl bg-slate-100" /> : !tables.length ? <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center text-sm font-semibold text-slate-500">Create a spreadsheet to begin.</div> : <><div className="flex flex-wrap gap-1 border-b border-slate-200 pb-2">{tables.map((table) => <button key={table.id} type="button" onClick={() => setSelectedId(table.id)} className={`rounded-t-lg px-4 py-2 text-xs font-black ${table.id === selectedId ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{table.name}</button>)}</div>{selected && <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">

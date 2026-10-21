@@ -1,0 +1,2 @@
+export const LIVE_DATA_MAXIMUM_ROWS = 50;
+export const LIVE_DATA_EMBEDDING_BATCH_SIZE = 32;

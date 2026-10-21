@@ -1,5 +1,6 @@
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { LIVE_DATA_MAXIMUM_ROWS } from './agent-live-data-limits.js';
 import { deleteAgentLiveDataTableIndex, syncAgentLiveDataTable } from './agent-live-data-index.service.js';
 
 function keyFromName(value) {
@@ -181,8 +182,12 @@ export async function deleteLiveDataTable(auth, agentId, tableId) {
 
 /** Replace a sheet in one PostgreSQL transaction, followed by one Qdrant sync. */
 export async function replaceLiveDataGrid(auth, agentId, tableId, input) {
+  if (input.rows.length > LIVE_DATA_MAXIMUM_ROWS) {
+    throw new AppError(400, 'Live Data tables support at most 50 data rows. No rows were saved.', 'LIVE_DATA_ROW_LIMIT');
+  }
   await withTenantContext(auth, async (client) => {
     await requireTable(client, auth.tenantId, agentId, tableId);
+    await client.query('SELECT id FROM agent_live_data_tables WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [auth.tenantId, tableId]);
     await client.query('DELETE FROM agent_live_data_rows WHERE tenant_id=$1 AND table_id=$2', [auth.tenantId, tableId]);
     await client.query('DELETE FROM agent_live_data_columns WHERE tenant_id=$1 AND table_id=$2', [auth.tenantId, tableId]);
     const keys = new Set();
@@ -268,6 +273,12 @@ export async function deleteLiveDataColumn(auth, agentId, tableId, columnId) {
 export async function createLiveDataRow(auth, agentId, tableId, input) {
   await withTenantContext(auth, async (client) => {
     await requireTable(client, auth.tenantId, agentId, tableId);
+    // Serialize additions with grid replacement (which also locks this table).
+    await client.query('SELECT id FROM agent_live_data_tables WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [auth.tenantId, tableId]);
+    const count = await client.query('SELECT count(*)::integer AS count FROM agent_live_data_rows WHERE tenant_id=$1 AND table_id=$2', [auth.tenantId, tableId]);
+    if (count.rows[0].count >= LIVE_DATA_MAXIMUM_ROWS) {
+      throw new AppError(400, 'Live Data tables support at most 50 data rows. No row was added.', 'LIVE_DATA_ROW_LIMIT');
+    }
     const values = normalizedValues(input.values, await columnsForTable(client, auth.tenantId, tableId));
     const result = await client.query(
       `INSERT INTO agent_live_data_rows (tenant_id, table_id, row_values, created_by, updated_by)
