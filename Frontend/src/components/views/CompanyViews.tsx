@@ -371,10 +371,10 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
           </div>
 
           <button 
-            onClick={() => setView('call-logs')}
+            onClick={() => setView('reports')}
             className="w-full text-center py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-700 rounded-xl text-xs font-bold border border-slate-200 mt-6 transition cursor-pointer"
           >
-            View All Call Logs →
+            View Reports →
           </button>
         </div>
       </div>

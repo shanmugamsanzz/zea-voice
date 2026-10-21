@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { inboundCallQueue, buildInboundQueueXml, createHoldMusic } from './inbound-call-queue.service.js';
 import { shouldQueueInboundCall } from '../queues/company-queue-feature.js';
 import { bindFollowUpCall } from '../calls/follow-up-dispatch.service.js';
+import { recordInboundQueue } from './inbound-queue-report.service.js';
 
 export const voiceRouter = Router();
 
@@ -83,6 +84,12 @@ voiceRouter.post('/answer', async (request, response) => {
       metadata: { phone: call.from, agentId: runtimeAgent.agentId, agentName: runtimeAgent.agentName,
         phoneNumberId: call.phoneNumberId } });
     if (admission.status !== 'admitted') {
+      const queuedRecord = await recordInboundQueue({ call, agent: runtimeAgent, admission });
+      // A verified hangup may have won the race against this polling request.
+      if (queuedRecord.status !== 'queued' && admission.status === 'waiting') {
+        response.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+        return;
+      }
       request.log.info({ stage: 'call.inbound_queue', tenantId: runtimeAgent.tenantId,
         providerCallId: call.providerCallId, status: admission.status, remainingMs: admission.remainingMs }, 'Inbound queue admission checked');
       response.type('application/xml').send(buildInboundQueueXml(admission, call.answerUrl));

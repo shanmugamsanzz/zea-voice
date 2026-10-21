@@ -4,6 +4,7 @@
  * this is test 
  */
 
+import { AccountUser } from './lib/accountIdentity';
 import React, { useEffect, useState } from 'react';
 import { AppStateProvider, useAppState } from './store/AppState';
 import { LoginView } from './views/LoginView';
@@ -24,7 +25,7 @@ function CoreApp() {
   useResizableTables();
   useKpiCardDecorations();
   useSurfaceDecorations();
-  const { role, setRole, setUserEmail, setTabAccess, resetNavigation } = useAppState();
+  const { role, setRole, setIdentity, setTabAccess, resetNavigation } = useAppState();
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
   const [authNotice, setAuthNotice] = useState('');
 
@@ -33,6 +34,7 @@ function CoreApp() {
     const handleSessionExpired = (event: Event) => {
       if (!active) return;
       resetNavigation();
+      setIdentity(null);
       const reason = event instanceof CustomEvent ? event.detail?.reason : 'expired';
       setAuthNotice(reason === 'logout'
         ? 'You signed out in another browser tab. Please sign in again.'
@@ -40,11 +42,11 @@ function CoreApp() {
       setAuthState('anonymous');
     };
     window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
-    apiRequest<{ user: { email?: string; role: string; tabAccess?: string[] | null } }>('/auth/me', { zeaCache: 'bypass' })
+    apiRequest<{ user: AccountUser & { role: string; tabAccess?: string[] | null } }>('/auth/me', { zeaCache: 'bypass' })
       .then(({ user }) => {
         if (!active) return;
         setRole(user.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : user.role === 'COMPANY_DEVELOPER' ? 'DEVELOPER' : 'USER');
-        setUserEmail(user.email ?? '');
+        setIdentity(user);
         setTabAccess(user.tabAccess ?? null);
         setAuthState('authenticated');
       })
@@ -52,6 +54,7 @@ function CoreApp() {
         if (!active) return;
         setAccessToken(null, true);
         resetNavigation();
+        setIdentity(null);
         setAuthState('anonymous');
       });
     return () => {
@@ -77,6 +80,7 @@ function CoreApp() {
     <DashboardLayout onLogout={async () => {
       await logout();
       resetNavigation();
+      setIdentity(null);
       setAuthNotice('');
       setAuthState('anonymous');
     }}>

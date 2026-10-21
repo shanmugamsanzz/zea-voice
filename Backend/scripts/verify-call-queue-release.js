@@ -12,6 +12,7 @@ const report = { passed: false, releaseReady: false, mode: liveRedis ? 'real_red
     'Provider calls, physical container restarts and live load/latency require staging verification.',
   ] };
 const checks = [
+  ['persistent inbound queue outcomes and tenant isolation', 'verify-inbound-queue-reporting.js'],
   ['queue feature flag and rollback', 'verify-company-queue-feature.js'],
   ['capacity, duplicates and expired leases', 'verify-company-call-capacity.js', true],
   ['100 mixed-source outbound tasks, limit 3', 'verify-outbound-capacity-queues.js', true],

@@ -291,7 +291,7 @@ export async function login(email: string, password: string) {
   const data = await apiRequest<{
     accessToken: string;
     accessExpiresAt: string;
-    user: { id: string; email: string; firstName: string; lastName: string; role: string; tabAccess?: string[] | null };
+    user: { id: string; email: string; firstName: string; lastName: string; tenantName?: string | null; role: string; tabAccess?: string[] | null };
   }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }, false);
   setAccessToken(data.accessToken, true);
   authChannel?.postMessage({ type: 'token-refreshed', token: data.accessToken });

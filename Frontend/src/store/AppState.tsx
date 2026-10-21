@@ -4,6 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { accountIdentity, AccountUser } from '../lib/accountIdentity';
 import { UserRole } from '../types';
 
 interface AppState {
@@ -16,6 +17,10 @@ interface AppState {
   selectedCampaignId: string | null;
   selectedCallId: string | null;
   userEmail: string;
+  userName: string;
+  companyName: string;
+  userInitials: string;
+  setIdentity: (user: AccountUser | null) => void;
   theme: 'light' | 'dark';
   setRole: (role: UserRole) => void;
   setView: (view: string) => void;
@@ -40,6 +45,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(() => stored('zea_voice_campaign_id'));
   const [selectedCallId, setSelectedCallId] = useState<string | null>(() => stored('zea_voice_call_id'));
   const [userEmail, setUserEmail] = useState('');
+  const [identity, setIdentityState] = useState(() => accountIdentity(null));
+  const setIdentity = (user: AccountUser | null) => {
+    setIdentityState(accountIdentity(user));
+    setUserEmail(user?.email ?? '');
+  };
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('theme');
@@ -110,6 +120,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       selectedCampaignId,
       selectedCallId,
       userEmail,
+      userName: identity.name,
+      companyName: identity.company,
+      userInitials: identity.initials,
+      setIdentity,
       theme,
       setRole,
       setView,

@@ -111,13 +111,13 @@ Playback ACK compatibility fix passed release checks previously. Later logs show
 
 ### L07 — Company/user labels show static names across accounts
 
-Status: User-reported UI bug; code investigation and fix deferred.
+Status: Fixed locally; deployment and multi-account browser verification pending.
 
-Problem: Labels such as “URL Factory's Org” and “Lead Developer” appear as static names for different company users instead of reflecting the signed-in identity and organization. Confirm which labels represent personal name, role and company before changing them.
+Problem: Labels such as “URL Factory's Org” and “Lead Developer” appear as static names for different company users instead of reflecting the signed-in identity and organization. The shared dashboard header contained hardcoded personal/company labels.
 
 Required change: Inspect shared dashboard layouts and authentication/profile data. Show the authenticated user's actual display name and their current company/organization; derive role labels from the authenticated role where applicable. Avoid hardcoded company/person placeholders and stale identity after logout, login or account switching. Do not confuse a role title with a user's name.
 
-Investigation starting point: `Frontend/src/components/layouts/DashboardLayouts.tsx` and its auth/profile data sources (exact cause not yet verified).
+Fix: The header now uses authenticated first/last name, tenant name and derived initials. Auth responses include tenantName; login/session restore populate identity and logout/session expiry clear it. Missing names fall back to email or Account. TypeScript and eight identity/authentication tests passed locally.
 
 Acceptance: Log in as different users in different companies and roles; each sees the correct name/company. Logout/login and profile refresh must not retain another user's labels. Missing profile values use neutral fallbacks. No cross-company identity disclosure.
 
@@ -132,5 +132,11 @@ Local changes: 32-input sequential embedding batches; UI/backend 50-row new-save
 Validation recorded: batch/failure/limit checks, retrieval checks, document embedding/source tracing checks and frontend TypeScript check passed. No deployment performed by the assistant. After deployment retry failed table saves and verify Index synced plus retrieved table evidence. See `docs/LIVE_DATA_INDEXING.md`.
 
 ## Updating this file
+
+### F02 — Inbound queue exits were missing from Reports
+
+Local implementation added: persistent tenant-scoped queued call records, separate caller-left/timeout outcomes, same-record admission, separate waiting duration, report labels and Analytics grouping. Normal queue-disabled/outbound/browser paths remain unchanged. Waiting callers have no fabricated AI transcript/summary; carrier hold usage is handled separately on signed hangup.
+
+Validation: inbound queue reporting tests, existing queue release simulation suite (including billing/RAG regressions), and frontend TypeScript checks passed. Not deployed or live-tested. Staging must cover two active calls plus a waiting third caller for hangup, timeout and successful admission, with cross-tenant isolation. Missing provider webhook/poll reconciliation remains a separate reliability limitation; see `docs/INBOUND_QUEUE_REPORTING.md`.
 
 For each newly observed issue, record: priority, confirmed versus suspected status, sanitized evidence, affected code, proposed scope, acceptance tests and deployment status. Priorities reflect current triage and can change with demonstrated impact. Do not mark an item fixed merely because a prompt was edited or a local test passed. Obtain task-specific authorization before implementing a listed fix; this file is a tracker, not permission to change production.

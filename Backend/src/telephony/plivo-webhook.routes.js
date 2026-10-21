@@ -11,6 +11,8 @@ import { finishValidatedFollowUp } from '../calls/follow-up-dispatch.service.js'
 import { callTransferService } from '../voice/call-transfer.service.js';
 import { buildTransferMusicXml } from '../voice/transfer-audio.js';
 import { env } from '../config/env.js';
+import { recordInboundQueue } from '../voice/inbound-queue-report.service.js';
+import { resolvePhoneNumberAgent } from '../voice/agent-resolver.service.js';
 
 const paramsSchema = z.object({ attemptId: z.string().uuid(), eventType: z.enum(['ring', 'hangup']) });
 const storedHangupQuerySchema = z.object({ attempt_id: z.string().uuid() });
@@ -104,8 +106,15 @@ plivoWebhookRouter.post('/hangup', async (req, res) => {
       const call = await validateIncomingPlivoCall({ ...input, payload: payload.data,
         rawPayload: input.payload, callbackType: 'hangup' });
       if (!call.capacityTenantId) throw error;
-      await inboundCallQueue.cancel({ tenantId: call.capacityTenantId, providerCallId: call.providerCallId });
-      data = { status: 'ended', waiting: true };
+      const wasWaiting = await inboundCallQueue.cancel({ tenantId: call.capacityTenantId, providerCallId: call.providerCallId });
+      // A hangup can beat the first waiting-record insert. Persist it before retrying the signed callback.
+      if (wasWaiting) {
+        const agent = await resolvePhoneNumberAgent(call);
+        await recordInboundQueue({ call, agent, admission: { status: 'waiting' } });
+        data = await processInboundPlivoHangup(input);
+      } else {
+        data = { status: 'ended', waiting: true };
+      }
     }
     res.json({ success: true, data });
     return;

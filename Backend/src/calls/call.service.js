@@ -42,6 +42,9 @@ function mapCall(row, includeTranscript = false, includeDeveloperMetadata = true
     agentId: row.agent_id, agentName: row.agent_name,
     campaignId: row.campaign_id, campaignName: row.campaign_name,
     contactName: contactName(row),
+    queueOutcome: row.provider_metadata?.inboundQueue?.outcome ?? null,
+    queueWaitSeconds: row.provider_metadata?.inboundQueue?.waitSeconds ?? null,
+    queueArrivedAt: row.provider_metadata?.inboundQueue?.arrivedAt ?? null,
     phoneNumberId: row.phone_number_id, fromNumber: row.from_number, toNumber: row.to_number,
     transport: row.provider_metadata?.source === 'browser_test' ? 'browser_test' : 'telephony',
     direction: row.direction, status: row.status, sentiment: row.sentiment,
@@ -90,7 +93,8 @@ const callSelect = `SELECT c.*, o.name AS company_name,
   s.follow_up_required ai_follow_up_required,s.follow_up_reason ai_follow_up_reason,
   s.usage ai_summary_usage,s.webhook_delivery ai_webhook_delivery,s.error_code ai_summary_error_code,
   s.error_message ai_summary_error_message,s.completed_at ai_summary_completed_at,
-  CASE WHEN c.status IN ('queued', 'ringing', 'connected')
+  CASE WHEN c.status='queued' AND c.provider_metadata->'inboundQueue'->>'state'='waiting' THEN 0
+    WHEN c.status IN ('queued', 'ringing', 'connected')
     THEN GREATEST(c.duration_seconds, floor(extract(epoch FROM (now() - c.started_at)))::int)
     ELSE c.duration_seconds END AS live_duration_seconds
   FROM call_sessions c JOIN organizations o ON o.tenant_id = c.tenant_id AND o.deleted_at IS NULL

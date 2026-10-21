@@ -3,6 +3,8 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { finishInboundQueueRow } from '../voice/inbound-queue-report.service.js';
+import { persistTelephonyUsage } from '../voice/call-completion.service.js';
 import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { finishAttempt, markAttemptRinging } from '../campaigns/campaign-execution.service.js';
@@ -216,6 +218,19 @@ export async function processInboundPlivoHangup(input) {
       providerCallId,
       ...describePlivoHangupCause(input.payload),
     }, 'Plivo hangup cause received for live call');
+    if (call.provider_metadata?.inboundQueue
+      && call.provider_metadata.inboundQueue.state !== 'admitted' && !call.answered_at) {
+      const finished = await finishInboundQueueRow(client, call, 'caller_left');
+      // Hold audio may be carrier-billed; do not invent AI duration/tokens or waive actual telephony usage.
+      if (!finished.credit_billing_finalized) {
+        const billedSeconds = Math.max(0, Number(input.payload.BillDuration ?? input.payload.Duration ?? 0) || 0);
+        await persistTelephonyUsage(client, finished, billedSeconds, new Date(), {
+          providerContext: async (_actor, operation) => operation(client),
+        });
+        await finalizeCallCreditBilling(client, { call: finished, durationSeconds: 0 });
+      }
+      return { duplicate: false, callId: call.id, tenantId: call.tenant_id, status: finished.status };
+    }
     if (call.ended_at) {
       await finalizeCallCreditBilling(client, {
         call, durationSeconds: Number(call.duration_seconds ?? 0),

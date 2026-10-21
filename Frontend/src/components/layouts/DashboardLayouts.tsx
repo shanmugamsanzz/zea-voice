@@ -57,6 +57,9 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
     view,
     setView,
     userEmail,
+    userName,
+    companyName,
+    userInitials,
     theme,
     setTheme,
     selectedCompanyId,
@@ -561,31 +564,33 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               {role === 'SUPER_ADMIN' ? (
                 <>
                   <div className="hidden lg:flex flex-col text-right">
-                    <span className="text-xs font-bold text-slate-800 leading-none">Zea Administrator</span>
+                    <span className="text-xs font-bold text-slate-800 leading-none">{userName}</span>
                     <span className="text-[10px] text-slate-400 font-mono mt-1">{userEmail}</span>
                   </div>
                   <div className="zea-profile-avatar w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 shadow-xs">
-                    JS
+                    {userInitials}
                   </div>
                 </>
               ) : role === 'DEVELOPER' ? (
                 <>
                   <div className="hidden lg:flex flex-col text-right">
                     <span className="text-[10px] text-indigo-500 font-bold uppercase tracking-wider block">Developer Account</span>
-                    <span className="text-xs font-black text-slate-800 mt-0.5 block">Lead Developer</span>
+                    {companyName && <span className="text-[10px] text-slate-500 truncate max-w-64" title={companyName}>{companyName}</span>}
+                    <span className="text-xs font-black text-slate-800 mt-0.5 block">{userName}</span>
                   </div>
                   <div className="zea-profile-avatar w-10 h-10 rounded-full bg-gradient-to-tr from-slate-800 to-indigo-950 text-indigo-300 flex items-center justify-center font-black text-sm border border-slate-700 shadow-md">
-                    D
+                    {userInitials}
                   </div>
                 </>
               ) : (
                 <>
                   <div className="hidden lg:flex flex-col text-right">
                     <span className="text-[10px] text-purple-500 font-bold uppercase tracking-wider block">User Account (Restricted)</span>
-                    <span className="text-xs font-black text-slate-800 mt-0.5 block">url factory's Org</span>
+                    {companyName && <span className="text-[10px] text-slate-500 truncate max-w-64" title={companyName}>{companyName}</span>}
+                    <span className="text-xs font-black text-slate-800 mt-0.5 block">{userName}</span>
                   </div>
                   <div className="zea-profile-avatar w-10 h-10 rounded-full bg-[#7C3AED] text-white flex items-center justify-center font-black text-sm border border-[#DDD6FE] shadow-sm">
-                    U
+                    {userInitials}
                   </div>
                 </>
               )}

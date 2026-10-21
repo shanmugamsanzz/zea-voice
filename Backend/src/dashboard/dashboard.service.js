@@ -126,7 +126,8 @@ export function getCompanyDashboard(auth, days) {
 export function getCompanyAnalytics(auth, days) {
   return withTenantContext(auth, async (client) => {
     const result = await client.query(`WITH filtered AS MATERIALIZED (
-          SELECT status, direction, sentiment, duration_seconds, started_at
+          SELECT status, direction, sentiment, duration_seconds, started_at,
+            provider_metadata->'inboundQueue'->>'outcome' AS queue_outcome
           FROM call_sessions
           WHERE tenant_id = $1 AND started_at >= current_date - ($2::int - 1)
         ), summary AS (
@@ -150,7 +151,7 @@ export function getCompanyAnalytics(auth, days) {
             count(*)::int AS count
           FROM filtered GROUP BY range, sort_order ORDER BY sort_order
         ), outcomes AS (
-          SELECT status::text AS name, count(*)::int AS value FROM filtered GROUP BY status ORDER BY count(*) DESC
+          SELECT COALESCE(queue_outcome,status::text) AS name, count(*)::int AS value FROM filtered GROUP BY COALESCE(queue_outcome,status::text) ORDER BY count(*) DESC
         ), sentiments AS (
           SELECT sentiment::text AS name, count(*)::int AS value FROM filtered GROUP BY sentiment
         )

@@ -40,6 +40,27 @@ export function createVoiceCallSession(input, dependencies = {}) {
     );
     if (existing.rowCount) {
       assertSameCall(existing.rows[0], input);
+      const waiting = existing.rows[0].provider_metadata?.inboundQueue?.state === 'waiting';
+      if (waiting && !existing.rows[0].ended_at && existing.rows[0].status === 'queued') {
+        const reservation = await (dependencies.reserveCredit ?? reserveTenantCallCredit)(client, {
+          tenantId: input.runtimeProfile.agent.tenantId, direction: input.call.direction,
+        });
+        const promoted = await client.query(`UPDATE call_sessions SET status='connected',
+          started_at=now(),answered_at=now(),reserved_credits=$2,credit_price_snapshot_inr=$3,
+          provider_metadata=provider_metadata || $4::jsonb || jsonb_build_object('inboundQueue',
+            (provider_metadata->'inboundQueue') || jsonb_build_object('state','admitted',
+              'admittedAt',now(),'waitSeconds',GREATEST(0,floor(extract(epoch FROM (now()-started_at)))::int)))
+          WHERE id=$1 AND ended_at IS NULL RETURNING *`, [existing.rows[0].id,
+          reservation.reservedCredits, reservation.priceSnapshotInr, JSON.stringify({
+            preCall: { status: 'pending' },
+            ...Object.fromEntries(['stt','llm','tts'].flatMap(kind => [
+              [`${kind}ProviderId`, input.runtimeProfile.providers[kind].providerId],
+              [`${kind}ModelId`, input.runtimeProfile.providers[kind].modelId],
+            ])),
+          })]);
+        if (!promoted.rowCount) throw new AppError(409, 'Queued call already ended', 'VOICE_CALL_ALREADY_ENDED');
+        return map(promoted.rows[0], false);
+      }
       const connected = await client.query(`UPDATE call_sessions
         SET status='connected',answered_at=COALESCE(answered_at,now())
         WHERE id=$1 AND ended_at IS NULL RETURNING *`, [existing.rows[0].id]);
