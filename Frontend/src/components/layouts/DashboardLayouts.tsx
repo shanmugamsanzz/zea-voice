@@ -585,9 +585,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               ) : (
                 <>
                   <div className="hidden lg:flex flex-col text-right">
-                    <span className="text-[10px] text-purple-500 font-bold uppercase tracking-wider block">User Account (Restricted)</span>
+                    <span className="text-xs font-black text-slate-800 block">Welcome, {userName}</span>
                     {companyName && <span className="text-[10px] text-slate-500 truncate max-w-64" title={companyName}>{companyName}</span>}
-                    <span className="text-xs font-black text-slate-800 mt-0.5 block">{userName}</span>
                   </div>
                   <div className="zea-profile-avatar w-10 h-10 rounded-full bg-[#7C3AED] text-white flex items-center justify-center font-black text-sm border border-[#DDD6FE] shadow-sm">
                     {userInitials}
