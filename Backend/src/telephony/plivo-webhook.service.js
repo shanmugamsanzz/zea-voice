@@ -78,6 +78,10 @@ async function attemptAccount(attemptId) {
 }
 
 export function plivoHangupOutcome(payload) {
+  const callStatus = String(payload.CallStatus ?? '').trim().toLowerCase().replace(/[ -]+/g, '_');
+  // Plivo can report a carrier rejection cause alongside a no-answer status.
+  // Use the explicit unanswered status for reporting and campaign retry policy.
+  if (callStatus === 'no_answer' || callStatus === 'noanswer') return 'no_answer';
   const value = String(payload.HangupCauseName ?? payload.CallStatus ?? payload.Event ?? '')
     .toLowerCase().replace(/[ -]+/g, '_');
   if (value.includes('busy')) return 'busy';

@@ -140,3 +140,10 @@ Local implementation added: persistent tenant-scoped queued call records, separa
 Validation: inbound queue reporting tests, existing queue release simulation suite (including billing/RAG regressions), and frontend TypeScript checks passed. Not deployed or live-tested. Staging must cover two active calls plus a waiting third caller for hangup, timeout and successful admission, with cross-tenant isolation. Missing provider webhook/poll reconciliation remains a separate reliability limitation; see `docs/INBOUND_QUEUE_REPORTING.md`.
 
 For each newly observed issue, record: priority, confirmed versus suspected status, sanitized evidence, affected code, proposed scope, acceptance tests and deployment status. Priorities reflect current triage and can change with demonstrated impact. Do not mark an item fixed merely because a prompt was edited or a local test passed. Obtain task-specific authorization before implementing a listed fix; this file is a tracker, not permission to change production.
+
+
+### add the feture like when i edit the agent agent should show the last chages dte and time 
+
+### add the new feture like when agent trnser the call in report it should show separaly 
+
+### we can call the multiple tools at the same time 

@@ -13,11 +13,25 @@ for (const duration of ['120', '30']) {
     HangupCauseCode: '4010', CallStatus: 'completed', Event: 'Hangup', BillDuration: duration,
   }), 'completed');
 }
-for (const status of ['failed', 'busy', 'no-answer', undefined]) {
+for (const status of ['failed', 'busy', undefined]) {
   assert.equal(plivoHangupOutcome({
     HangupCauseName: 'End Of XML Instructions', CallStatus: status,
   }), 'failed', 'XML ending alone must not establish a completed call');
 }
+// Replay the unanswered campaign call: carrier cause must not hide CallStatus.
+for (const status of ['no-answer', 'no_answer', 'noanswer', ' NO-ANSWER ']) {
+  const payload = {
+    HangupSource: 'Carrier', HangupCauseName: 'Rejected', HangupCauseCode: '3020',
+    CallStatus: status, Event: 'Hangup', BillDuration: '0',
+  };
+  assert.equal(plivoHangupOutcome(payload), 'no_answer');
+  assert.equal(payload.HangupCauseName, 'Rejected');
+  assert.equal(describePlivoHangupCause(payload).hangupCauseCode, '3020');
+}
+assert.equal(plivoHangupOutcome({ HangupCauseName: 'End Of XML Instructions', CallStatus: 'no-answer' }), 'no_answer');
+assert.equal(plivoHangupOutcome({ HangupCauseName: 'Rejected', CallStatus: 'failed' }), 'rejected');
+assert.equal(plivoHangupOutcome({ CallStatus: 'busy' }), 'busy');
+assert.equal(plivoHangupOutcome({ CallStatus: 'canceled' }), 'canceled');
 for (const [cause, expected] of [
   ['Normal Hangup', 'completed'], ['Normal Clearing', 'completed'],
   ['User Busy', 'busy'], ['No Answer', 'no_answer'], ['Call Rejected', 'rejected'],
