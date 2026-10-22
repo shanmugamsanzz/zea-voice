@@ -265,6 +265,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     workflowDefinitions,
     workflowState: state,
     language: input.language,
+    onResponseLanguage: input.onResponseLanguage,
     maximumSpeechCharacters,
     onSpeechSentence: dependencies.onSpeechSentence,
   }, { invokeStructuredLlm: llmTurn.invoke });
@@ -287,7 +288,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     ? await runToolResultResponse({
       invokeStructuredLlm: llmTurn.invoke,
       agentPrompt,
-      language: input.language,
+      language: universalTurn.responseLanguage || input.language,
       currentQuestion: input.latestUtterance,
       toolCall: {
         name: universalTurn.workflowAction?.toolName,
@@ -329,6 +330,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
 
   return Object.freeze({
+    responseLanguage: universalTurn.responseLanguage || input.language,
     decision: universalTurn.decision,
     speech: toolResponse?.speech ?? universalTurn.speech,
     state: workflowResult.state,

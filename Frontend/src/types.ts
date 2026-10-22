@@ -147,6 +147,10 @@ export interface VoiceAgent {
   conversationContextMode?: 'last_n_turns' | 'full_current_call';
   conversationContextTurns?: number;
   latencyAcknowledgementMessage?: string;
+  latencySingleEnabled?: boolean;
+  latencyMultipleEnabled?: boolean;
+  latencyPhraseInterval?: number | 'random';
+  latencyPhraseGroups?: { language: string; phrases: string[] }[];
   technicalFailureMessage?: string;
   callbackEnabled?: boolean;
   callbackMinimumDelaySeconds?: number;

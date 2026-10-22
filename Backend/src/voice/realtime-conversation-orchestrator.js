@@ -1,3 +1,5 @@
+import { createAcknowledgementPhraseSelector } from './interaction/acknowledgement-phrases.js';
+import { normalizeResponseLanguage } from './interaction/response-language.js';
 import { traceSelectedCallEvent } from './providers/llm/request-trace.js';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
@@ -94,9 +96,7 @@ import {
 } from './source-trace.js';
 
 function languageCode(value) {
-  const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/i);
-  if (match) return match[1].toLowerCase();
-  return '';
+  return normalizeResponseLanguage(value);
 }
 
 export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
@@ -2333,8 +2333,13 @@ export class RealtimeConversationOrchestrator {
     const turnStartedAt = Date.now();
     const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
     let finalResponseReady = false;
+    this.acknowledgementPhraseSelector ??= createAcknowledgementPhraseSelector();
+    const phraseSelection = this.acknowledgementPhraseSelector.prepare(
+      this.runtimeProfile.agent.settings, this.responseLanguage || this.runtimeProfile.agent.language,
+      configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+    );
     const latencyAcknowledgementSelection = resolveConfiguredLatencyAcknowledgement({
-      configuredText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+      configuredText: phraseSelection.text,
     });
     const latencyAcknowledgementText = latencyAcknowledgementSelection.text;
     const acknowledgementCacheEntry = (audio = null) => ({
@@ -2371,7 +2376,11 @@ export class RealtimeConversationOrchestrator {
       thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
       acknowledgementText: latencyAcknowledgementText,
       isActive: () => !finalResponseReady && epoch === this.epoch && !this.finalized,
-      onAcknowledgement: (text) => sentencePipeline.enqueueAcknowledgement(text),
+      onAcknowledgement: (text) => {
+        const queued = sentencePipeline.enqueueAcknowledgement(text);
+        if (queued) phraseSelection.markQueued();
+        return queued;
+      },
       onTriggered: ({ thresholdMs, queued }) => {
         this.runtimeMetrics.latency.templateEngineAcknowledgements ??= {
           triggered: 0, queued: 0,
@@ -2430,7 +2439,16 @@ export class RealtimeConversationOrchestrator {
         turnEpoch: epoch,
         turnBoundaryId: `${this.call.id}:${epoch}`,
         usageDirection: this.call.direction,
-        language: languageCode(this.runtimeProfile.agent.language),
+        language: this.responseLanguage || languageCode(this.runtimeProfile.agent.language),
+        onResponseLanguage: (language) => {
+          if (epoch === this.epoch && !this.finalized && language) {
+            if (language !== (this.responseLanguage || languageCode(this.runtimeProfile.agent.language))) {
+              sentencePipeline.cancelAcknowledgements();
+              latencyAcknowledgement.cancel();
+            }
+            this.responseLanguage = language;
+          }
+        },
         mainPrompt: (this.transferFollowUp.outcome ? this.transferFollowUp.promptContext(this.runtimeProfile.tools) + '\n' : '') + (this.runtimeProfile.tools.some(tool=>tool.id===manageFollowUpTool.id)?`${followUpInstructions}\n`:'')+(this.runtimeProfile.tools.some(tool=>tool.id===updateContactTool.id)
           ? `${contactNameInstructions}\n${this.savedCallerName ? `Latest caller-supplied contact name: ${JSON.stringify(this.savedCallerName)}. This supersedes older contact names and does not verify identity.\n` : ''}${this.runtimeProfile.agent.prompt}` : this.runtimeProfile.agent.prompt),
         maximumSpeechCharacters:
@@ -2462,7 +2480,7 @@ export class RealtimeConversationOrchestrator {
         onTurnResolved: ({ decision, activeWorkflow }) => {
           latencyAcknowledgement.setSuppressed(!latencyAcknowledgementEligibleForRoute({
             decision, activeWorkflow,
-          }));
+          }) || !phraseSelection.eligibleSearch());
         },
         onSpeechSentence: (sentence, details = {}) => {
           if (this.#isStaleGeneration(epoch) || this.finalized) return false;

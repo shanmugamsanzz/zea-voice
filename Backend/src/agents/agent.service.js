@@ -1,3 +1,4 @@
+import { validateAcknowledgementSettings } from '../voice/interaction/acknowledgement-phrases.js';
 import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { agentConversationConfiguration, saveAgentConversationConfiguration } from './agent-conversation-configuration.js';
@@ -38,6 +39,7 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
+    validateAcknowledgementSettings(settings);
     return normalizeLiveMemorySettings(normalizeTtsUsageLimitSettings(normalizeCallbackSettings(
       normalizePostCallSummarySettings(normalizeInteractionSettings(normalizeInterruptionSettings(
         withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,

@@ -1,3 +1,4 @@
+import { LatencyPhraseSettings } from './LatencyPhraseSettings';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -370,6 +371,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const savedSettings = value.settings ?? {};
     setAgent((current) => ({
       ...current, ...(savedSettings as Partial<VoiceAgent>), id: value.id, name: value.name,
+      latencySingleEnabled: savedSettings.latencySingleEnabled !== false,
+      latencyMultipleEnabled: savedSettings.latencyMultipleEnabled === true,
+      latencyPhraseInterval: (savedSettings.latencyPhraseInterval as number | 'random') ?? 2,
+      latencyPhraseGroups: (savedSettings.latencyPhraseGroups as VoiceAgent['latencyPhraseGroups']) ?? [],
       status: value.status, description: value.description ?? '', goal: value.goal ?? '', language: value.language,
       agentUsage: value.usageDirection,
       voiceId: value.voiceId, temperature: value.temperature, prompt: value.prompt,
@@ -595,8 +600,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setError('Recent Turns must be between 1 and 10 to protect live response latency.'); return;
     }
     const latencyAcknowledgementMessage = String(agent.latencyAcknowledgementMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const latencyPhraseGroups = (agent.latencyPhraseGroups ?? []).map(group => ({
+      language: group.language, phrases: [...new Set(group.phrases.map(p => p.trim()).filter(Boolean))],
+    }));
+    if (latencyPhraseGroups.length > 10 || new Set(latencyPhraseGroups.map(g => g.language)).size !== latencyPhraseGroups.length
+      || latencyPhraseGroups.some(g => !g.language || !g.phrases.length || g.phrases.length > 20 || g.phrases.some(p => p.length > 200))
+      || (agent.latencyMultipleEnabled && !latencyPhraseGroups.length)) {
+      setError('Use unique languages with 1 to 20 phrases each, at most 200 characters per phrase.'); return;
+    }
     const technicalFailureMessage = String(agent.technicalFailureMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
-    if (!latencyAcknowledgementMessage || latencyAcknowledgementMessage.length > 500) {
+    if ((agent.latencySingleEnabled !== false && !latencyAcknowledgementMessage) || latencyAcknowledgementMessage.length > 500) {
       setError('Latency Acknowledgement is required and cannot exceed 500 characters.'); return;
     }
     if (technicalFailureMessage.length > 500
@@ -636,6 +649,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         conversationContextMode,
         conversationContextTurns,
         latencyAcknowledgementMessage,
+        latencyPhraseGroups,
         technicalFailureMessage,
         callCheckResponse,
         maxInactivityPrompts,
@@ -1722,11 +1736,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div className="rounded-xl border border-violet-100 bg-violet-50/30 p-4">
                     <div className="mt-3">
                       <label className="mb-1 block text-[10px] font-bold text-slate-500">Latency Acknowledgement</label>
+                      <LatencyPhraseSettings agent={agent} disabled={isReadOnly} onChange={value => setAgent({ ...agent, ...value })} />
                       <textarea
                         rows={2}
                         maxLength={500}
                         value={agent.latencyAcknowledgementMessage || ''}
-                        disabled={isReadOnly}
+                        disabled={isReadOnly || agent.latencySingleEnabled === false}
                         onChange={(event) => setAgent({ ...agent, latencyAcknowledgementMessage: event.target.value })}
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />

@@ -1,3 +1,4 @@
+import { languageChangeSchema, acceptedLanguageChange, responseLanguageInstruction } from './response-language.js';
 import { AppError } from '../../middleware/errors.js';
 import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
 import { tagTemplateEngineTiming } from './template-engine-turn-timing.js';
@@ -11,8 +12,9 @@ const outcomes = Object.freeze([
 
 const universalTurnSchema = Object.freeze({
   type: 'object', additionalProperties: false,
-  required: ['outcome', 'speech', 'workflowAction'],
+  required: ['outcome', 'speech', 'workflowAction', 'languageChange'],
   properties: Object.freeze({
+    languageChange: languageChangeSchema,
     outcome: Object.freeze({ type: 'string', enum: outcomes }),
     speech: Object.freeze({ type: 'string' }),
     workflowAction: Object.freeze({
@@ -126,7 +128,7 @@ function acceptDecision(raw, chunks, maximumSpeechCharacters, workflowDefinition
     quote: workflowAction.authorizationQuote,
   }, 'execute', context);
   return Object.freeze({ outcome: raw.outcome, speech,
-    evidenceIds: Object.freeze(evidenceIds), workflowAction });
+    evidenceIds: Object.freeze(evidenceIds), workflowAction, languageChange: raw.languageChange ?? null });
 }
 
 function universalPrompt({ agentPrompt, language, chunks, liveData, previousContext,
@@ -150,7 +152,7 @@ function universalPrompt({ agentPrompt, language, chunks, liveData, previousCont
     'For WORKFLOW_ACTION, return the configured workflowId and toolName, newly supplied or extracted arguments as argumentsJson, and the exact current-caller authorization phrase as authorizationQuote for EXECUTE; otherwise use an empty authorizationQuote.',
     'Do not use configured technical recovery text during an ordinary conversation.',
     'Live Data is the current source of truth for its tables. Use its current rows for prices, availability, counts and filters; do not use older conversation statements for those facts. Use rowCount as the exact full-table count. If a table says truncated, do not invent an exact filtered count from its partial rows.',
-    `Caller language: ${cleanText(language, 80) || 'Follow the caller language'}`,
+    responseLanguageInstruction(language),
     ...(Number(maximumSpeechCharacters) > 0
       ? [`Maximum spoken characters: ${Math.floor(Number(maximumSpeechCharacters))}`]
       : ['No spoken character limit is configured for this agent.']),
@@ -221,6 +223,8 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
   });
   const validated = acceptDecision(completionValue(completion), retrieval.chunks,
     input.maximumSpeechCharacters, workflowDefinitions, input.conversationContext);
+  const responseLanguage = acceptedLanguageChange(validated.languageChange, input.currentQuestion) || input.language;
+  input.onResponseLanguage?.(responseLanguage);
   if (holdSpeech && validated.workflowAction?.action !== 'EXECUTE'
     && !input.cancellationSignal?.aborted) {
     for (const [sentence, details] of pendingSpeech) input.onSpeechSentence?.(sentence, details);
@@ -229,6 +233,7 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     chunk, retrieval.request.tenantId, retrieval.request.agentId,
   )));
   return Object.freeze({
+    responseLanguage,
     decision: legacyDecision(validated), outcome: validated.outcome,
     workflowAction: validated.workflowAction, speech: validated.speech, evidence,
     liveData: retrieval.liveData,
