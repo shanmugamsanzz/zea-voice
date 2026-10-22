@@ -21,6 +21,7 @@ interface WorkspaceIdentity {
 const availableScopes = [
   ['calls:create', 'Create outbound call tasks'], ['calls:read', 'Read company call records'],
   ['agents:read', 'Read company agents'], ['campaigns:read', 'Read company campaigns'],
+  ['campaigns:write', 'Manage campaigns and submit campaign tasks'],
   ['phone_numbers:read', 'Read assigned company numbers'], ['reports:read', 'Read company reports'],
 ] as const;
 
