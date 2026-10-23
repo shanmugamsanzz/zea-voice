@@ -1,3 +1,5 @@
+import { callerNameInstruction, loadSavedCallerName } from './interaction/caller-name-state.js';
+import { resolveCallCheckResponse, ongoingCallInstruction } from './interaction/call-check-language.js';
 import { createAcknowledgementPhraseSelector } from './interaction/acknowledgement-phrases.js';
 import { normalizeResponseLanguage } from './interaction/response-language.js';
 import { traceSelectedCallEvent } from './providers/llm/request-trace.js';
@@ -443,6 +445,15 @@ export class RealtimeConversationOrchestrator {
         this.log.warn({stage:'prompt.dynamic_context_unavailable',callId:this.call.id,errorCode:error?.code ?? 'CONTEXT_UNAVAILABLE'},
           'Dynamic prompt history unavailable; using empty history');
         values = buildDynamicPromptValues({call:this.call,timeZone:this.runtimeProfile.agent.timeZone});
+      }
+      if (this.mediaSession.transport !== 'browser_test' && !values['contact.name']) {
+        try {
+          const saved = await (this.dependencies.loadSavedCallerName ?? loadSavedCallerName)(this.call);
+          if (saved) values = { ...values, 'contact.name': saved };
+        } catch (error) {
+          this.callerNameLookupUnavailable = true;
+          this.log.warn({ stage: 'contact.name_lookup_failed', callId: this.call.id }, 'Caller name lookup unavailable; optional name collection suppressed');
+        }
       }
       this.conversationOpeningValues=values;
       this.contextualOpeningRequired=continuityEnabled && this.mediaSession.transport!=='browser_test' && needsContextualOpening(values);
@@ -1237,7 +1248,9 @@ export class RealtimeConversationOrchestrator {
       }, 'Agent-initiated welcome playback started');
       const epoch = this.epoch;
       void this.#guard('welcome', async () => {
-        await this.#synthesizeWelcome(action.text, `welcome-${epoch}`);
+        this.openingStarted = true;
+        const welcomePlayed = await this.#synthesizeWelcome(action.text, `welcome-${epoch}`);
+        if (welcomePlayed) this.openingDelivered = true;
         if (epoch === this.epoch && this.controller.state === callStates.GREETING) {
           await this.controller.greetingComplete();
           this.#armInactivity();
@@ -1447,9 +1460,9 @@ export class RealtimeConversationOrchestrator {
       completedTurn,
       this.runtimeProfile.agent.settings?.callCheckPhrases,
     );
-    const callCheckResponse = String(
-      this.runtimeProfile.agent.settings?.callCheckResponse ?? '',
-    ).normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const callCheckResponse = resolveCallCheckResponse(
+      this.runtimeProfile.agent.settings, this.responseLanguage, this.runtimeProfile.agent.language,
+    );
     if (outputWasActive && callCheckPhrase && callCheckResponse) {
       await this.#cancelActive('configured_call_check_phrase');
       if (this.finalized || this.controller.state !== callStates.LISTENING) {
@@ -2332,6 +2345,9 @@ export class RealtimeConversationOrchestrator {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
     const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
+    this.log.info({ stage: 'voice.response_language_input', callId: this.call.id, turnEpoch: epoch,
+      responseLanguage: this.responseLanguage || languageCode(this.runtimeProfile.agent.language) },
+    'Persistent language supplied independently of turn history');
     let finalResponseReady = false;
     this.acknowledgementPhraseSelector ??= createAcknowledgementPhraseSelector();
     const phraseSelection = this.acknowledgementPhraseSelector.prepare(
@@ -2440,7 +2456,13 @@ export class RealtimeConversationOrchestrator {
         turnBoundaryId: `${this.call.id}:${epoch}`,
         usageDirection: this.call.direction,
         language: this.responseLanguage || languageCode(this.runtimeProfile.agent.language),
-        onResponseLanguage: (language) => {
+        onCallerNameAsked: (asked) => {
+          if (asked && epoch === this.epoch && !this.finalized) this.optionalCallerNameAsked = true;
+        },
+        onResponseLanguage: (language, details = {}) => {
+          this.log.info({ stage: 'voice.response_language', callId: this.call.id, turnEpoch: epoch,
+            ...details, resultingLanguage: language, stale: epoch !== this.epoch || this.finalized },
+          'Response language metadata evaluated');
           if (epoch === this.epoch && !this.finalized && language) {
             if (language !== (this.responseLanguage || languageCode(this.runtimeProfile.agent.language))) {
               sentencePipeline.cancelAcknowledgements();
@@ -2449,7 +2471,8 @@ export class RealtimeConversationOrchestrator {
             this.responseLanguage = language;
           }
         },
-        mainPrompt: (this.transferFollowUp.outcome ? this.transferFollowUp.promptContext(this.runtimeProfile.tools) + '\n' : '') + (this.runtimeProfile.tools.some(tool=>tool.id===manageFollowUpTool.id)?`${followUpInstructions}\n`:'')+(this.runtimeProfile.tools.some(tool=>tool.id===updateContactTool.id)
+        mainPrompt: (this.runtimeProfile.tools.some(tool => tool.id === updateContactTool.id)
+          ? callerNameInstruction({name: this.savedCallerName || this.conversationOpeningValues?.['contact.name'], asked: this.optionalCallerNameAsked || this.callerNameLookupUnavailable}) + '\n' : '') + ongoingCallInstruction({ openingStarted: this.openingStarted, openingDelivered: this.openingDelivered, conversationStarted: this.conversationStarted }) + '\n' + (this.transferFollowUp.outcome ? this.transferFollowUp.promptContext(this.runtimeProfile.tools) + '\n' : '') + (this.runtimeProfile.tools.some(tool=>tool.id===manageFollowUpTool.id)?`${followUpInstructions}\n`:'')+(this.runtimeProfile.tools.some(tool=>tool.id===updateContactTool.id)
           ? `${contactNameInstructions}\n${this.savedCallerName ? `Latest caller-supplied contact name: ${JSON.stringify(this.savedCallerName)}. This supersedes older contact names and does not verify identity.\n` : ''}${this.runtimeProfile.agent.prompt}` : this.runtimeProfile.agent.prompt),
         maximumSpeechCharacters:
           Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse) > 0
@@ -2490,6 +2513,7 @@ export class RealtimeConversationOrchestrator {
           latencyAcknowledgement.cancel();
           const queued = sentencePipeline.enqueue(sentence);
           if (queued) {
+            this.conversationStarted = true;
             streamedFinalSentenceCount += 1;
             finalResponseQueuedAt ??= Date.now();
             this.log.info({
@@ -2601,14 +2625,15 @@ export class RealtimeConversationOrchestrator {
         return;
       }
       if (errorKind === 'action') {
-        sentencePipeline.cancel();
         this.log.warn({ err: error, stage: 'template_engine.action_blocked',
           callId: this.call.id, turnEpoch: epoch,
-        }, 'Unauthorized or invalid workflow action was blocked without technical recovery');
-        if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-          await this.controller.interrupt('template_engine_action_blocked');
-        }
-        return;
+        }, 'Invalid action blocked; approved spoken recovery replaces silent return');
+        const technical = configuredTechnicalFailureResponse(this.runtimeProfile);
+        if (!technical) throw error;
+        result = { speech: technical, state: this.templateEngineState,
+          evidence: [], evidenceIds: [], toolExecuted: false,
+          llmInvocationCount: templateEngineLlmInvocations,
+          operationalFailure: error.code, recoveryKind: 'operational' };
       } else if (streamedFinalSentenceCount > 0) {
         // Streaming speech is already caller-facing work. A provider can fail
         // while closing its response after one or more complete sentences have
@@ -2711,6 +2736,7 @@ export class RealtimeConversationOrchestrator {
       throw new AppError(503, 'The template-engine response could not be queued for speech',
         'VOICE_FINAL_RESPONSE_NOT_QUEUED');
     }
+    this.conversationStarted = true;
     finalResponseQueuedAt ??= Date.now();
     // Source formatting and diagnostics are not prerequisites for audio. Do
     // them only after validated text has entered the TTS pipeline.

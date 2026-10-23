@@ -1,3 +1,4 @@
+import { validateCallCheckResponses } from '../voice/interaction/call-check-language.js';
 import { validateAcknowledgementSettings } from '../voice/interaction/acknowledgement-phrases.js';
 import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
@@ -40,6 +41,7 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
     validateAcknowledgementSettings(settings);
+    validateCallCheckResponses(settings);
     return normalizeLiveMemorySettings(normalizeTtsUsageLimitSettings(normalizeCallbackSettings(
       normalizePostCallSummarySettings(normalizeInteractionSettings(normalizeInterruptionSettings(
         withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,

@@ -1,3 +1,4 @@
+import { CallCheckLanguages } from './CallCheckLanguages';
 import { LatencyPhraseSettings } from './LatencyPhraseSettings';
 /**
  * @license
@@ -412,6 +413,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         ? savedSettings.callCheckPhrases.map(String)
         : [],
       callCheckResponse: String(savedSettings.callCheckResponse ?? ''),
+      callCheckResponses: (savedSettings.callCheckResponses as Record<string,string>) ?? {},
     }));
     setPhoneNumberId(value.phoneNumberId ?? '');
     setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
@@ -616,6 +618,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
+    const callCheckResponses: Record<string, string> = Object.fromEntries(Object.entries(agent.callCheckResponses ?? {}).map(([key,value]) => [key,value.trim()]).filter(([,value]) => value));
+    if (Object.keys(callCheckResponses).length > 20 || Object.values(callCheckResponses).some(text => text.length > 500)) {
+      setError('Use at most 20 Call Check language responses, up to 500 characters each.'); return;
+    }
     const callCheckPhrases = agent.callCheckPhrases ?? [];
     const callCheckResponse = String(agent.callCheckResponse ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (callCheckPhrases.length > 0 && !callCheckResponse) {
@@ -652,6 +658,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         latencyPhraseGroups,
         technicalFailureMessage,
         callCheckResponse,
+        callCheckResponses,
         maxInactivityPrompts,
       };
       const payload = {
@@ -1527,9 +1534,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           maxLength={500}
                           rows={3}
                           onChange={(event) => setAgent({ ...agent, callCheckResponse: event.target.value })}
-                          placeholder="Example: வணக்கம்! நான் Zea AI பேசுறேன். உங்களுக்கு எப்படி உதவலாம்?"
+                          placeholder="Example: I am here. Please go ahead."
                           className="mt-2 w-full resize-y bg-white border border-emerald-200 focus:border-emerald-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
                         />
+                        <CallCheckLanguages value={agent.callCheckResponses ?? {}} disabled={isReadOnly} onChange={value => setAgent({ ...agent, callCheckResponses: value })} />
                       </div>
                     </div>
 

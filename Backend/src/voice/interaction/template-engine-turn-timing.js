@@ -28,7 +28,7 @@ export function assertUniversalTurnArchitecture({ architecture, stageTimings } =
   });
   const violations = [];
   if (calls.retrieval !== 1) violations.push('focused_retrieval_must_run_once');
-  if (calls.answerGeneration !== 1) violations.push('universal_llm_operation_must_run_once');
+  if (calls.answerGeneration !== (architecture.answerGenerationCalls ?? 1)) violations.push('universal_llm_operation_must_run_once');
   const expectedToolResultCalls = architecture.toolResultResponseCalls ?? 0;
   if (calls.toolResultResponse !== expectedToolResultCalls) {
     violations.push('tool_result_llm_operation_count_invalid');

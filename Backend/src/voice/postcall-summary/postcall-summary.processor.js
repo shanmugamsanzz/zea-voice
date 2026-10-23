@@ -147,7 +147,7 @@ export async function executePostCallSummaryJob(summaryJobId, attemptContext = {
         throw Object.assign(new Error(event.message), { code: event.code, retryable: event.retryable });
       }
     }
-    const structured = normalizePostCallSummaryOutput(text);
+    const structured = normalizePostCallSummaryOutput(text, { transcript: job.transcript ?? [] });
     const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
     const summaryUsage = usageRecord(job, usage, finishReason);
     const completed = await complete(summaryJobId, {

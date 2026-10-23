@@ -266,6 +266,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     workflowState: state,
     language: input.language,
     onResponseLanguage: input.onResponseLanguage,
+    onCallerNameAsked: input.onCallerNameAsked,
     maximumSpeechCharacters,
     onSpeechSentence: dependencies.onSpeechSentence,
   }, { invokeStructuredLlm: llmTurn.invoke });
@@ -304,10 +305,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }) : null;
   assertCurrentTurn();
 
+  if (toolResponse?.callerNameAsked) input.onCallerNameAsked?.(true);
   const llmArchitecture = assertSingleLlmTurnArchitecture({
     invocationCount: llmTurn.count(),
-    requiredInvocations: workflowResult.toolExecuted ? 2 : 1,
-    maximumInvocations: workflowResult.toolExecuted ? 2 : 1,
+    requiredInvocations: (workflowResult.toolExecuted ? 2 : 1) + (universalTurn.correctionAttempts ?? 0),
+    maximumInvocations: 2,
     turnKind: workflowResult.toolExecuted ? 'contextual_qdrant_tool_result' : 'contextual_qdrant',
   });
   const architecture = Object.freeze({
@@ -321,7 +323,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       'llm_output_accepted',
       'tts_ready',
     ]),
-    answerGenerationCalls: 1,
+    answerGenerationCalls: 1 + (universalTurn.correctionAttempts ?? 0),
     toolResultResponseCalls: workflowResult.toolExecuted ? 1 : 0,
     universalOperation: true,
     languageOrBusinessRouting: false,
@@ -340,7 +342,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     diagnostics: Object.freeze({
       retrieval: universalTurn.retrievalDiagnostics,
       postSearch: Object.freeze({
-        answerGenerationCalls: 1,
+        answerGenerationCalls: 1 + (universalTurn.correctionAttempts ?? 0),
         toolResultResponseCalls: workflowResult.toolExecuted ? 1 : 0,
       }),
       architecture,

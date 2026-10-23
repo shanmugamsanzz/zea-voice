@@ -1,0 +1,9 @@
+# Ongoing calls and Call Check language
+
+The per-call orchestrator records welcome-started and successful welcome playback separately. A first queued conversation response also marks the conversation ongoing for user-initiated flows. Subsequent universal/tool-result prompt context includes these flags independently of retained history and instructs the model not to replay the opening or ask initial speaking permission again. Interrupted welcomes are not marked as fully played, but should not restart the introduction. Action-specific consent and resuming a pending task remain permitted. This is model guidance, not a hard output-language or duplicate-greeting detector.
+
+Agent settings optionally contain callCheckResponses, a map of normalized language code to approved static speech (up to 20 entries, 500 characters each). The editor provides a language selector and response textbox under Call Check Response. Entries override the legacy response for their language. The existing callCheckResponse remains the default-language fallback; existing agents need no migration or setting changes. When active language differs from default and no localized response exists, a presence check goes through the normal language-locked LLM instead of playing the wrong-language static text. It may take longer than a configured static reply. No translations are invented by the backend.
+
+No prompt files, tool authorization, callback rules, telephony routing or TTS provider settings change. Existing legacy static wording may itself contain an introduction; review it and replace with a short presence acknowledgement if so. New placeholder text demonstrates a presence acknowledgement, not an introduction.
+
+Checks: verify-ongoing-call-language.js, frontend TypeScript, existing runtime/RAG regressions. UAT should cover cached/live welcome, interrupted welcome, user-initiated opening, one-turn history, English/Tamil Call Check overrides and missing-translation fallback.

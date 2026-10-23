@@ -4,6 +4,8 @@ import { runAgentQdrantUniversalTurn } from '../src/voice/interaction/agent-qdra
 assert.equal(normalizeResponseLanguage('Tamil (India)'), 'ta');
 assert.equal(normalizeResponseLanguage('English (US)'), 'en');
 assert.equal(normalizeResponseLanguage('ta-IN'), 'ta');
+assert.equal(acceptedLanguageChange({language:'English',requestQuote:'can you speak in english?'},'Can you speak in English?'),'en');
+assert.equal(acceptedLanguageChange({language:'en',requestQuote:'Speak  English'},'Speak English'),'en');
 assert.equal(acceptedLanguageChange({language:'en',requestQuote:'Speak English'},'hello'),null);
 const retrieval={request:{tenantId:'t',agentId:'a',previousContext:[]},chunks:[],diagnostics:{}};
 let language='ta';

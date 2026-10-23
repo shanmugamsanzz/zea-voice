@@ -11,9 +11,10 @@ const normalized = normalizePostCallSummaryOutput(`\`\`\`json
   "sentiment": "positive",
   "collected_data": {"package": "Gold"},
   "follow_up_required": true,
-  "follow_up_reason": "Customer requested package details"
+  "follow_up_reason": "Caller requested details tomorrow",
+  "follow_up_evidence": {"basis":"caller_requested_contact","caller_quote":"Send the details tomorrow"}
 }
-\`\`\``);
+\`\`\``, { transcript: [{role:"user",content:"Send the details tomorrow"}] });
 assert.equal(normalized.summary, 'Customer asked about the Gold package.');
 assert.equal(normalized.sentiment, 'positive');
 assert.deepEqual(normalized.collectedData, { package: 'Gold' });

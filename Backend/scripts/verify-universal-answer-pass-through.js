@@ -21,7 +21,7 @@ async function run(answer, selectedRetrieval = retrieval) {
       schema = request.responseFormat.schema;
       return { outputParsed: parseTemplateEngineStructuredOutput({
         completion: { type: 'completed', finishReason: 'stop' },
-        output: JSON.stringify({ workflowAction: null, languageChange: null, ...answer }),
+        output: JSON.stringify({ workflowAction: null, languageChange: null, callerNameAsked: false, ...answer }),
         schema,
       }) };
     },
@@ -31,8 +31,8 @@ async function run(answer, selectedRetrieval = retrieval) {
 const accepted = await run({ outcome: 'FACTUAL_ANSWER', speech: 'Alpha costs 999.' });
 assert.equal(accepted.speech, 'Alpha costs 999.');
 assert.deepEqual(accepted.evidenceIds, ['a']);
-assert.deepEqual(schema.required, ['outcome', 'speech', 'workflowAction', 'languageChange']);
-assert.deepEqual(Object.keys(schema.properties), ['languageChange', 'outcome', 'speech', 'workflowAction']);
+assert.deepEqual(schema.required, ['outcome', 'speech', 'workflowAction', 'languageChange', 'callerNameAsked']);
+assert.deepEqual(Object.keys(schema.properties), ['languageChange', 'callerNameAsked', 'outcome', 'speech', 'workflowAction']);
 
 const withoutChunks = await run(
   { outcome: 'FACTUAL_ANSWER', speech: 'The answer is still spoken.' },

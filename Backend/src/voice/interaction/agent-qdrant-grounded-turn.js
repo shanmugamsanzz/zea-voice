@@ -12,9 +12,10 @@ const outcomes = Object.freeze([
 
 const universalTurnSchema = Object.freeze({
   type: 'object', additionalProperties: false,
-  required: ['outcome', 'speech', 'workflowAction', 'languageChange'],
+  required: ['outcome', 'speech', 'workflowAction', 'languageChange', 'callerNameAsked'],
   properties: Object.freeze({
     languageChange: languageChangeSchema,
+    callerNameAsked: { type: 'boolean' },
     outcome: Object.freeze({ type: 'string', enum: outcomes }),
     speech: Object.freeze({ type: 'string' }),
     workflowAction: Object.freeze({
@@ -78,7 +79,7 @@ function validatedWorkflowAction(raw, outcome, workflowDefinitions) {
   if (outcome !== 'WORKFLOW_ACTION') {
     if (raw.workflowAction !== null) throw new AppError(502,
       'A non-workflow outcome cannot contain a workflow action',
-      'QDRANT_UNIVERSAL_LLM_WORKFLOW_INVALID');
+      'QDRANT_UNIVERSAL_LLM_WORKFLOW_INVALID', { reason: 'non_workflow_action_conflict' });
     return null;
   }
   const action = raw.workflowAction;
@@ -128,7 +129,7 @@ function acceptDecision(raw, chunks, maximumSpeechCharacters, workflowDefinition
     quote: workflowAction.authorizationQuote,
   }, 'execute', context);
   return Object.freeze({ outcome: raw.outcome, speech,
-    evidenceIds: Object.freeze(evidenceIds), workflowAction, languageChange: raw.languageChange ?? null });
+    evidenceIds: Object.freeze(evidenceIds), workflowAction, callerNameAsked: raw.callerNameAsked === true, languageChange: raw.languageChange ?? null });
 }
 
 function universalPrompt({ agentPrompt, language, chunks, liveData, previousContext,
@@ -215,16 +216,48 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
   // Hold it until the action is validated; execution speaks its result only.
   const pendingSpeech = [];
   const holdSpeech = workflowDefinitions.length > 0;
-  const completion = await invokeStructuredLlm(request, {
+  let completion = await invokeStructuredLlm(request, {
     onSpeechSentence: holdSpeech
       ? (sentence, details) => { pendingSpeech.push([sentence, details]); }
       : input.onSpeechSentence,
     cancellationSignal: input.cancellationSignal,
   });
-  const validated = acceptDecision(completionValue(completion), retrieval.chunks,
-    input.maximumSpeechCharacters, workflowDefinitions, input.conversationContext);
+  let validated;
+  let correctionAttempts = 0;
+  try {
+    validated = acceptDecision(completionValue(completion), retrieval.chunks,
+      input.maximumSpeechCharacters, workflowDefinitions, input.conversationContext);
+  } catch (error) {
+    if (error?.details?.reason !== 'non_workflow_action_conflict' || !holdSpeech) throw error;
+    if (input.cancellationSignal?.aborted) { const aborted = new Error('Turn cancelled'); aborted.name = 'AbortError'; throw aborted; }
+    // No action has executed. One speech-only correction; never promote an
+    // inconsistent action into an authorized execution or replay a tool.
+    correctionAttempts = 1;
+    pendingSpeech.length = 0;
+    const correction = tagTemplateEngineTiming(Object.freeze({
+      ...request,
+      messages: Object.freeze([...request.messages, Object.freeze({ role: 'system', content:
+        'Your previous output combined a non-workflow outcome with a workflow action and was rejected. No action executed. Correct the response to the same caller question using the supplied facts and language. Return workflowAction=null, do not use WORKFLOW_ACTION or WORKFLOW_CANCELLATION, do not claim any action succeeded. If a tool is needed, briefly explain no action was completed and ask the caller to repeat that request. Do not restart the introduction.' })]),
+    }), 'answer_generation');
+    try {
+      completion = await invokeStructuredLlm(correction, { cancellationSignal: input.cancellationSignal });
+      const raw = completionValue(completion);
+      if (raw?.workflowAction !== null || ['WORKFLOW_ACTION','WORKFLOW_CANCELLATION'].includes(raw?.outcome)) {
+        throw new Error('Correction attempted an action');
+      }
+      validated = acceptDecision(raw, retrieval.chunks, input.maximumSpeechCharacters, [], input.conversationContext);
+    } catch (failure) {
+      if (failure?.name === 'AbortError' || input.cancellationSignal?.aborted) throw failure;
+      throw new AppError(502, 'Speech-only response correction failed', 'QDRANT_UNIVERSAL_LLM_CORRECTION_FAILED');
+    }
+  }
   const responseLanguage = acceptedLanguageChange(validated.languageChange, input.currentQuestion) || input.language;
-  input.onResponseLanguage?.(responseLanguage);
+  if (validated.workflowAction?.action !== 'EXECUTE') input.onCallerNameAsked?.(validated.callerNameAsked);
+  input.onResponseLanguage?.(responseLanguage, {
+    previousLanguage: input.language, requestedLanguage: validated.languageChange?.language ?? null,
+    changeProvided: validated.languageChange != null,
+    accepted: Boolean(acceptedLanguageChange(validated.languageChange, input.currentQuestion)),
+  });
   if (holdSpeech && validated.workflowAction?.action !== 'EXECUTE'
     && !input.cancellationSignal?.aborted) {
     for (const [sentence, details] of pendingSpeech) input.onSpeechSentence?.(sentence, details);
@@ -239,6 +272,7 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     liveData: retrieval.liveData,
     evidenceIds: validated.evidenceIds, retrievalDiagnostics: retrieval.diagnostics,
     speechStreaming: completion?.speechStreaming ?? null,
-    llmInvocationCount: 1,
+    correctionAttempts,
+    llmInvocationCount: 1 + correctionAttempts,
   });
 }

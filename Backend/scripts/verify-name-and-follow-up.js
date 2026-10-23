@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+process.env.NODE_ENV='test';process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';process.env.REDIS_HOST ??= 'localhost';
+const {callerNameInstruction,loadSavedCallerName}=await import('../src/voice/interaction/caller-name-state.js');
+const {runAgentQdrantUniversalTurn}=await import('../src/voice/interaction/agent-qdrant-grounded-turn.js');
+const {normalizePostCallSummaryOutput}=await import('../src/voice/postcall-summary/postcall-summary-output.js');
+assert.match(callerNameInstruction({name:'Ravi'}),/Never ask their name again/);
+assert.match(callerNameInstruction({asked:true}),/Do not ask again/);
+assert.match(callerNameInstruction(),/ask their own name once/);
+let asked=false;
+const retrieval={request:{tenantId:'t',agentId:'a',previousContext:[]},chunks:[],diagnostics:{}};
+await runAgentQdrantUniversalTurn({retrieval,currentQuestion:'hello',workflowDefinitions:[],onCallerNameAsked:value=>{asked ||= value;}},{invokeStructuredLlm:async()=>({outputParsed:{outcome:'CONVERSATIONAL_RESPONSE',speech:'May I know your name?',workflowAction:null,callerNameAsked:true}})});
+assert.equal(asked,true);assert.match(callerNameInstruction({asked}),/Do not ask again/);
+assert.match(callerNameInstruction({asked:false}),/ask their own name once/);
+const speculative={summary:'Information provided. No next action agreed.',follow_up_required:true,follow_up_reason:'Caller may ask questions in future'};
+assert.equal(normalizePostCallSummaryOutput(speculative).followUpRequired,false);
+const supported={summary:'Caller asked for a callback.',follow_up_required:true,follow_up_reason:'Callback requested',follow_up_evidence:{basis:'caller_requested_contact',caller_quote:'Call me tomorrow'}};
+assert.equal(normalizePostCallSummaryOutput(supported,{transcript:[{role:'user',content:'Please call me tomorrow'}]}).followUpRequired,true);
+assert.equal(normalizePostCallSummaryOutput(supported,{transcript:[{role:'assistant',content:'Call me tomorrow'}]}).followUpRequired,false);
+assert.equal(normalizePostCallSummaryOutput(supported,{transcript:[{role:'user',content:'Thanks, goodbye'}]}).followUpRequired,false);
+const falseFlag=normalizePostCallSummaryOutput({...supported,follow_up_required:false},{transcript:[{role:'user',content:'Call me tomorrow'}]});
+assert.equal(falseFlag.followUpRequired,false);assert.equal(falseFlag.followUpReason,null);
+console.log('PASS known/missing/asked name state, per-call metadata and transcript-evidenced follow-up flags');
+
+let lookup=0;
+const name=await loadSavedCallerName({id:'call-a',tenantId:'tenant-a',workspaceId:'workspace-a'},{contextRunner:async operation=>operation({query:async(sql,values)=>{
+ if(sql.startsWith('SET LOCAL'))return {};
+ lookup++;assert.deepEqual(values,['call-a','tenant-a','workspace-a']);
+ assert.match(sql,/ct.tenant_id=c.tenant_id/);assert.match(sql,/WHEN c.direction='inbound' THEN c.from_number/);
+ assert.match(sql,/WHEN c.direction='outbound' THEN c.to_number/);
+ return {rows:[{display_name:'Ravi'}]};
+}})});
+assert.equal(name,'Ravi');assert.equal(lookup,1);

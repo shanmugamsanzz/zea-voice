@@ -141,6 +141,7 @@ export interface VoiceAgent {
   explicitStopPhrases?: string[];
   callCheckPhrases?: string[];
   callCheckResponse?: string;
+  callCheckResponses?: Record<string, string>;
   llmProvider?: string;
   greetingMode?: 'agent_initiates' | 'user_initiates';
   cachePolicy?: 'persistent_24h' | 'session_only' | 'disabled';
