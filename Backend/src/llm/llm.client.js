@@ -1,3 +1,4 @@
+import { resolveOpenAiRequestOptions, openAiGenerationParameters } from './openai-request-options.js';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errors.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
@@ -69,6 +70,7 @@ export function resolveLlmConfiguration(agent) {
     modelId: agent.llm.modelId,
     model,
     apiKey,
+    requestOptions: resolveOpenAiRequestOptions(agent.llm.modelSettings),
     ...endpoint,
   };
 }
@@ -94,8 +96,7 @@ export async function invokeAgentLlm(configuration, {
         body: JSON.stringify({
           model: configuration.model,
           messages,
-          temperature,
-          max_tokens: maxOutputTokens,
+          ...openAiGenerationParameters(configuration.requestOptions, {temperature, maxOutputTokens}),
           stream: false,
         }),
         signal: AbortSignal.timeout(env.LLM_REQUEST_TIMEOUT_MS),

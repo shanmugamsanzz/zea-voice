@@ -1,3 +1,4 @@
+import { openAiGenerationParameters } from '../../../llm/openai-request-options.js';
 import { traceLlmRequest } from './request-trace.js';
 import { env } from '../../../config/env.js';
 import { resolveLlmConfiguration } from '../../../llm/llm.client.js';
@@ -61,8 +62,10 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
       const body = JSON.stringify({
           model: configuration.model,
           messages: input.messages,
-          temperature: input.temperature,
-          max_tokens: input.maxOutputTokens ?? env.LLM_MAX_OUTPUT_TOKENS,
+          ...openAiGenerationParameters(configuration.requestOptions, {
+            temperature: input.temperature,
+            maxOutputTokens: input.maxOutputTokens ?? env.LLM_MAX_OUTPUT_TOKENS,
+          }),
           stream: true,
           stream_options: { include_usage: true },
           ...(input.responseFormat?.type === 'json_schema' ? {
