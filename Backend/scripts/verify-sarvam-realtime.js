@@ -1,0 +1,21 @@
+﻿import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+process.env.NODE_ENV='test';process.env.DATABASE_URL??='postgresql://test:test@localhost/test';process.env.REDIS_HOST??='localhost';
+const {resolveSarvamRealtimeConfiguration,createSarvamRealtimeSttAdapter,isSarvamRealtime}=await import('../src/voice/providers/stt/sarvam-realtime.adapter.js');
+const config={providerId:'p1',modelId:'m1',modelKey:'saaras:v3-realtime',baseUrl:'https://api.sarvam.ai',parameters:{SARVAM_API_KEY:'test-secret'},modelCapabilities:{runtime:{adapter:'sarvam',streaming:true},audio:{input:{encoding:'pcm_s16le',sampleRate:16000,channels:1}}},effectiveSettings:{language_code:'auto',stream_type:'fast',min_speech_duration_ms:150,high_vad_sensitivity:true}};
+const resolved=resolveSarvamRealtimeConfiguration(config);const url=new URL(resolved.endpoint);
+assert.equal(url.pathname,'/speech-to-text-realtime/ws');assert.equal(url.searchParams.get('language_code'),'auto');assert.equal(url.searchParams.get('stream_type'),'fast');assert.equal(url.searchParams.has('high_vad_sensitivity'),false);assert.ok(!resolved.endpoint.includes('test-secret'));
+assert.equal(isSarvamRealtime({...config,modelKey:'saaras:v3'}),false);
+assert.throws(()=>resolveSarvamRealtimeConfiguration({...config,effectiveSettings:{language_code:'unknown'}}));
+assert.throws(()=>resolveSarvamRealtimeConfiguration({...config,effectiveSettings:{threshold:2}}));
+assert.throws(()=>resolveSarvamRealtimeConfiguration({...config,effectiveSettings:{endpointing:'manual'}}));
+class Socket extends EventEmitter{constructor(){super();this.readyState=0;this.sent=[];queueMicrotask(()=>{this.readyState=1;this.emit('open');});}send(x){this.sent.push(JSON.parse(x));}close(c=1000,r=''){this.readyState=3;this.emit('close',c,Buffer.from(r));}}
+let socket;const adapter=createSarvamRealtimeSttAdapter({providerConfig:config,runtimeContext:{webSocketFactory:()=>socket=new Socket()}});const events=[];adapter.onEvent(e=>events.push(e));await adapter.connect();adapter.sendAudio(Buffer.alloc(3200));assert.equal(socket.sent[0].event,'audio_input');adapter.flush();assert.equal(socket.sent.length,1);
+const emit=m=>socket.emit('message',Buffer.from(JSON.stringify(m)));
+emit({event:'vad.speech_start'});assert.deepEqual(events.map(e=>e.type),['speech_started']);
+emit({event:'transcript.partial',text:'doctor',language:'ta-IN'});assert.equal(events.at(-1).type,'partial_transcript');assert.equal(events.some(e=>e.type==='final_transcript'),false);
+emit({event:'transcript.partial',text:'doctor name please'});assert.equal(events.at(-1).text,'doctor name please');
+emit({event:'transcript.final',text:'doctor name please',language:'ta-IN'});assert.deepEqual(events.slice(-2).map(e=>e.type),['speech_ended','final_transcript']);
+emit({event:'error',code:'RATE_LIMIT',is_fatal:false,message:'retry'});assert.equal(events.at(-1).retryable,true);
+adapter.close();assert.equal(events.filter(e=>e.type==='usage').reduce((n,e)=>n+e.audioDurationMs,0),100);const length=events.length;emit({event:'transcript.partial',text:'late'});assert.equal(events.length,length);assert.throws(()=>adapter.sendAudio(Buffer.alloc(2)));
+console.log('PASS Sarvam Realtime: configuration, protocol, early partials, final boundary, errors, usage, close and legacy selection');
