@@ -173,7 +173,7 @@ const envSchema = z.object({
   LLM_CIRCUIT_RESET_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(30000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
-  LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
+  LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(20000).transform(value => Math.min(value, 20000)),
   // Used only when a streaming STT provider does not send its own speech-end
   // event.  It finalizes a complete caller turn after genuine quiet, never
   // from sound alone.

@@ -74,7 +74,7 @@ export function buildDynamicPromptValues({ call = {}, contact, summaries = [], f
 }
 
 // One-pass, allowlisted substitution; values are JSON data, never evaluated templates.
-export function renderDynamicPrompt(prompt, values, maximumChars = 40000) {
+export function renderDynamicPrompt(prompt, values, maximumChars = 20000) {
   const source = String(prompt ?? '');
   if (!hasDynamicPromptValues(source)) return { text:source, resolvedVariables:[] };
   const baseline = source.replace(pattern,(match,key)=>keys.has(key) ? '""' : match);
