@@ -1,3 +1,4 @@
+import { isSarvamRealtime, createSarvamRealtimeSttAdapter } from './sarvam-realtime.adapter.js';
 import { WebSocket } from 'ws';
 import { env } from '../../../config/env.js';
 import { AppError } from '../../../middleware/errors.js';
@@ -380,12 +381,14 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
 
 export function registerSarvamSttAdapter(registry) {
   if (registry.has('stt', 'sarvam')) return;
-  registry.register('stt', 'sarvam', createSarvamSttAdapter, {
+  registry.register('stt', 'sarvam', options => isSarvamRealtime(options.providerConfig)
+    ? createSarvamRealtimeSttAdapter(options) : createSarvamSttAdapter(options), {
     aliases: ['sarvam-ai', 'sarvam ai', 'sarvam stt'],
     supports: ({ providerConfig }) => {
       try {
         const format = resolveModelAudioFormat(providerConfig, 'input');
-        return format.channels === 1 && ['pcm_s16le', 'pcm_s16be'].includes(format.encoding)
+        return format.channels === 1 && (isSarvamRealtime(providerConfig)
+          ? format.encoding === 'pcm_s16le' : ['pcm_s16le', 'pcm_s16be'].includes(format.encoding))
           && [8000, 16000].includes(format.sampleRate);
       } catch { return false; }
     },
