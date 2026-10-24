@@ -1305,7 +1305,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <FieldInfoTooltip
                         id="speech-confirmation-delay-information"
-                        text="After customer speech is confirmed by STT, this delay helps avoid accidental interruptions. It never interrupts on sound alone."
+                        text="Retained for legacy delayed interruption. Current immediate-word mode stops on the first recognized meaningful word without waiting for this delay. Sound alone never interrupts."
                         triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Speech Confirmation Delay (ms)</span>}
                       />
                     </div>
@@ -1322,7 +1322,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       }}
                       className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
                     />
-                    <p className="mt-1.5 text-[11px] font-medium text-slate-400">Default: 350 ms. Allowed range: 150–1500 ms.</p>
+                    <p className="mt-1.5 text-[11px] font-medium text-slate-400">Legacy delay only; immediate-word interruption does not wait. Default: 350 ms. Allowed range: 150–1500 ms.</p>
                   </div>
                 )}
               </div>
@@ -1348,7 +1348,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <div className="mb-1.5 flex items-center gap-1.5">
                         <FieldInfoTooltip
                           id="minimum-meaningful-words-information"
-                          text="Normal customer speech needs this many recognized words before it can interrupt the agent. Explicit stop phrases remain supported separately."
+                          text="Used for short-turn handling and legacy delayed interruption. Current immediate-word mode stops on the first recognized meaningful word. Continue phrases remain exempt."
                           triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Minimum Meaningful Words</span>}
                         />
                       </div>

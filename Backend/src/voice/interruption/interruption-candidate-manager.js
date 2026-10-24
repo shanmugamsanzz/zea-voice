@@ -112,17 +112,16 @@ export class InterruptionCandidateManager {
     const wordPassed = this.configuration.wordBased.enabled
       && (this.wordCount >= this.configuration.wordBased.minimumWords || Boolean(this.matchedTrigger));
 
-    // A timer is now a confirmation delay, never independent evidence. This
-    // prevents a fan, car, breathing, or an empty STT event from cancelling
-    // the agent merely because the delay elapsed.
-    // A stop phrase is text-confirmed evidence and may stop active TTS at
-    // once. Normal customer speech still needs both meaningful text and the
-    // configured confirmation delay.
-    const passed = this.classification === 'explicit_stop'
+    // No sound-only cancellation: even immediate mode requires lexical STT text.
+    // Configured continue phrases remain non-interrupting backchannels.
+    const enabled = this.configuration.wordBased.enabled;
+    const immediateWord = this.configuration.immediateWordInterruption === true
+      && enabled && this.classification === 'meaningful' && this.wordCount >= 1;
+    const passed = enabled && (this.classification === 'explicit_stop'
       ? Boolean(this.matchedTrigger)
-      : Boolean(timePassed && wordPassed);
+      : immediateWord || Boolean(timePassed && wordPassed));
     if (passed) {
-      this.confirmedBy = this.matchedTrigger ? 'explicit_stop_phrase' : source;
+      this.confirmedBy = this.matchedTrigger ? 'explicit_stop_phrase' : immediateWord ? 'first_recognized_word' : source;
       if (this.timer) this.clearTimer(this.timer);
       this.timer = null;
       const result = { ...this.snapshot(), timePassed, wordPassed };

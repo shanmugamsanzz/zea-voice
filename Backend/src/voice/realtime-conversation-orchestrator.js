@@ -3460,7 +3460,7 @@ export class RealtimeConversationOrchestrator {
     if (this.activeCancellationPromise) return this.activeCancellationPromise;
     const operation = (async () => {
       const cancelledEpoch = this.epoch;
-      await this.activeAssistantPlayback?.persistAudible?.(reason);
+      const playbackToPersist = this.activeAssistantPlayback;
       if (this.activeAssistantPlayback?.epoch === cancelledEpoch) this.activeAssistantPlayback = null;
       this.epoch += 1;
       this.liveCallMemory?.cancelTurn?.(cancelledEpoch);
@@ -3475,6 +3475,11 @@ export class RealtimeConversationOrchestrator {
       // can take time and must never allow stale speech to continue meanwhile.
       const audioCancellation = this.audioEngine?.cancelStaleAudio?.(reason);
       this.runtimeMetrics.interruptions.clearedAudioFrames += Number(audioCancellation?.removedFrames ?? 0);
+      // Audio silence must not wait for transcript/database persistence. Start
+      // reconciliation after epoch invalidation and remote clear, retaining its snapshot.
+      const persistence = Promise.resolve().then(() => playbackToPersist?.persistAudible?.(reason))
+        .catch(error => this.log.warn({ stage: 'transcript.interrupted_persist_failed', callId: this.call.id,
+          errorCode: error?.code ?? 'PERSIST_FAILED' }, 'Interrupted transcript persistence failed'));
       let cancelledLookaheadJobs = 0;
       for (const cancelScheduler of this.activeLookaheadSchedulers) {
         cancelledLookaheadJobs += Number(cancelScheduler(reason) ?? 0);
@@ -3505,6 +3510,7 @@ export class RealtimeConversationOrchestrator {
       if (transition && this.controller
         && [callStates.GREETING, callStates.THINKING, callStates.SPEAKING]
           .includes(this.controller.state)) await this.controller.interrupt(reason);
+      await persistence;
     })();
     this.activeCancellationPromise = operation;
     try {

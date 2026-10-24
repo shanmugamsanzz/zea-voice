@@ -1,0 +1,9 @@
+# Immediate word interruption
+
+When interruption is enabled, the first lexical meaningful STT transcript word cancels active greeting, thinking or speech. It bypasses the legacy confirmation-delay and minimum-word gates. Empty transcripts, punctuation, sound-only speech-start events and configured continue phrases do not cancel output. Explicit stop phrases keep working. The interruption toggle remains authoritative. A per-agent settings value immediateWordInterruption=false retains the older delayed policy; default is immediate.
+
+Cancellation invalidates the old epoch and clears local queued audio plus remote playback before starting interrupted-transcript persistence. It still cancels LLM, TTS and lookahead jobs, and rejects late generation output. Partial transcripts never launch the next LLM turn: finalized speech and existing end-of-speech assembly remain required. Saved legacy timing values remain for rollback and short-turn handling; frontend hints explain their current role.
+
+Speech recognition latency and remote clear delivery remain unavoidable. STT can mistake background conversation or noise for real words; this is text-gated rather than a guarantee of speaker identity. Configured continue phrases intentionally remain exempt. No new caller text or credentials are logged by this change.
+
+Verification: verify-immediate-word-interruption.js, verify-interruption-engine.js, verify-interruption-settings.js, verify-interruption-audio-isolation.js. The stale language-specific incomplete-turn expectation in the settings verifier was aligned with the existing generic final-turn validator. Live browser and Plivo tests are required after deployment to measure first-word-to-clear latency, background noise, rapid repeated interruptions and preservation of caller speech. No deployment or database migration is performed.
