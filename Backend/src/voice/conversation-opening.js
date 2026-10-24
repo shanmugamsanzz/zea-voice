@@ -13,6 +13,7 @@ export function needsContextualOpening(values) {
 
 export function buildContextualOpeningInstruction(values,language) {
   const context={direction:values['call.direction'],purpose:values['call.purpose'],
+    ...(values['call.summary'] ? {triggerSummary:values['call.summary']} : {}),
     contactName:values['contact.name'],returning:values['conversation.is_returning'],
     recentSummaries:values['conversation.recent_summaries'],lastOutcome:values['conversation.last_outcome'],
     pendingQuestions:values['conversation.pending_questions'],callbackReason:values['callback.reason'],
