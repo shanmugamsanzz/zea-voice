@@ -25,6 +25,7 @@ function createCandidate(configuration) {
 }
 
 const configuration = resolveInterruptionConfiguration({
+  immediateWordInterruption: false,
   timeBasedInterruptionEnabled: true,
   speechConfirmationDelayMs: 350,
   minimumMeaningfulWords: 2,
@@ -61,11 +62,11 @@ for (const stopText of ['wait', 'ஒரு நிமிஷம்']) {
 
 // UI-configured stop phrases must be honored without language-specific exclusions.
 for (const phrase of ['repeat', 'again', 'explain', '\u0bae\u0bc0\u0ba3\u0bcd\u0b9f\u0bc1\u0bae\u0bcd', '\u0b9a\u0bca\u0bb2\u0bcd\u0bb2\u0bc1\u0b99\u0bcd\u0b95']) {
-  const configuredStop = createCandidate(resolveInterruptionConfiguration({ explicitStopPhrases: [phrase] }));
+  const configuredStop = createCandidate(resolveInterruptionConfiguration({ immediateWordInterruption: false, explicitStopPhrases: [phrase] }));
   const result = configuredStop.manager.observeTranscript(phrase);
   assert.equal(result.classification, 'explicit_stop');
   assert.equal(result.confirmed, true);
-  const unconfiguredStop = createCandidate(resolveInterruptionConfiguration({ explicitStopPhrases: [] }));
+  const unconfiguredStop = createCandidate(resolveInterruptionConfiguration({ immediateWordInterruption: false, explicitStopPhrases: [] }));
   assert.equal(unconfiguredStop.manager.observeTranscript(phrase).classification, 'meaningful');
   assert.equal(unconfiguredStop.manager.confirmed, false);
 }

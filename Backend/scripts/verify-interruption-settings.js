@@ -65,7 +65,7 @@ candidate.fireTimer();
 assert.equal(candidate.confirmations.length, 0, 'Sound/timer alone must never interrupt');
 
 const firstWord = candidate.manager.observeTranscript('hello');
-assert.equal(firstWord.confirmed, false, 'One word must not satisfy a two-word setting');
+assert.equal(firstWord.confirmed, true, 'Immediate mode must stop on one recognized word regardless of legacy word setting');
 const meaningful = candidate.manager.observeTranscript('hello please');
 assert.equal(meaningful.confirmed, true, 'Confirmed meaningful text after the delay must interrupt');
 assert.equal(candidate.confirmations.length, 1);
@@ -102,11 +102,12 @@ incrementalUtterance.observePartial('cardiac health பத்தி சொல்
 incrementalUtterance.observeFinal('cardiac health பத்தி சொல்லுங்க');
 assert.equal(incrementalUtterance.text, 'எனக்கு வந்து cardiac health பத்தி சொல்லுங்க', 'Incremental STT partials must append without duplicate text');
 
-assert.equal(validateFinalCustomerTurn({ text: 'எனக்கு வந்து', minimumWords: 2 }).reason, 'incomplete');
+assert.equal(validateFinalCustomerTurn({ text: 'எனக்கு வந்து', minimumWords: 2 }).accepted, true);
 assert.equal(validateFinalCustomerTurn({ text: 'cardiac health பத்தி சொல்லுங்க', confidence: 0.2, minimumWords: 2 }).reason, 'low_confidence');
 assert.equal(validateFinalCustomerTurn({ text: 'cardiac health பத்தி சொல்லுங்க', confidence: null, minimumWords: 2 }).accepted, true);
 
 const delayed = createCandidate(resolveInterruptionConfiguration({
+  immediateWordInterruption: false,
   timeBasedInterruptionEnabled: true,
   speechConfirmationDelayMs: 350,
   minimumMeaningfulWords: 2,

@@ -60,6 +60,7 @@ export function resolveInterruptionConfiguration(settings = {}, numericSensitivi
     ?? settings.interruptionTriggerWords
     ?? defaultExplicitStopPhrases, defaultExplicitStopPhrases);
   return Object.freeze({
+    immediateWordInterruption: settings.immediateWordInterruption !== false,
     timeBased: Object.freeze({
       enabled: boolean(settings.timeBasedInterruptionEnabled, agentControlDefaults.interruptionEnabled),
       thresholdMs: confirmationDelayMs,
